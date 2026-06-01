@@ -1,0 +1,13 @@
+question,answer
+What is Python?,Python is a popular programming language used for Artificial intelligence machine learning and web development.
+How can you concatenate two lists in Python?,using the + operator and extend() method.
+How to improve my study habits?,Create a timetable can take breaks and practice regularly.
+Difference between for loop and while loop in Python?,For loop: Used when we know how many times to repeat often with 1.lists 2.tuples sets or dictionaries.
+While loop: Used when we only have an end condition and don’t know exactly how many times it will repeat.
+what is difference between list and tuple?,lists are mutable and use square brackets[] whereas tuples are immutable and use parentheses().
+what is lambda function?,an anonymous one line function defined using lambda keyword and it can take any number of arguments.
+what is the difference between is and ==?,==checks if the values of two objects are equal and is checks if two variables point to same memory location.
+who developed python and when was it first introduced?,python was developed by Guido Van Rossum and first introduced on February 20 1991.
+explain the purpose and usage of virtual environments in python?,virtual environment in python allow developers to create isolated environments for their projects.this ensures that project dependencies do not interfere with each other making it easier to manage dependencies and maintain project stability   
+
+

@@ -1,0 +1,8 @@
+streamlit>=1.32.0
+pandas
+numpy
+nltk
+scikit-learn
+transformers
+torch
+sentencepiece
