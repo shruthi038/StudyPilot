@@ -1,4 +1,6 @@
 import streamlit as st
+import json
+import os
 import pandas as pd
 import numpy as np
 import nltk
@@ -408,6 +410,7 @@ def render_sidebar_section(feature_key, friendly_name):
             st.markdown("<div style='height:1px;background:#2D3748;margin:2px 8px;'></div>", unsafe_allow_html=True)
             if st.button("🗑️  Delete", key=f"del_{item_id}_{feature_key}", use_container_width=True):
                 del history_dict[item_id]
+                save_data()
                 st.session_state['active_menu_item_id'] = ""
                 if active_id == item_id:
                     remaining = list(history_dict.keys())
@@ -431,6 +434,7 @@ def render_sidebar_section(feature_key, friendly_name):
                         else: msgs[0]['text'] = new_title.strip()
                     else:
                         history_dict[eid]['title'] = new_title.strip()
+                    save_data()
                     st.session_state['editing_item_id'] = ""; st.rerun()
 
 # ---------------------- MAIN APP ----------------------
@@ -559,6 +563,7 @@ def render_main_app():
             active_chat.append({"role":"user","text":chat_input})
             active_chat.append({"role":"assistant","text":ans})
             st.session_state['all_chats'][st.session_state['active_chat_id']] = active_chat
+            save_data()
             st.rerun()
 
     # SUMMARIZER
@@ -599,6 +604,7 @@ def render_main_app():
                     if node['title'].startswith("Untitled"):
                         node['title'] = raw_text[:18]+"..."
                     st.session_state['all_summaries'][st.session_state['active_summary_id']] = node
+                    save_data()
                     st.rerun()
 
         if node['summary']:
@@ -729,6 +735,7 @@ def render_main_app():
                 plan['mode'] = mode
                 plan['total_minutes'] = total_minutes
                 st.session_state['all_plans'][st.session_state['active_planner_id']] = plan
+                save_data()
                 st.rerun()
 
         if plan.get('schedule'):
@@ -979,8 +986,45 @@ def render_login_page():
                     elif len(np1) < 4: st.error("❌ Too short.")
                     else:
                         st.session_state['user_db'][st.session_state['recovery_target_user']]['password'] = hash_password(np1.strip())
+                        save_data()
                         st.success("🔒 Updated! Sign in now.")
                         st.session_state['auth_view'] = "login"; st.rerun()
+
+# ---------------------- PERSISTENCE ----------------------
+DATA_FILE = "studypilot_data.json"
+
+def load_data():
+    """Load persisted data from JSON file into session state."""
+    if not os.path.exists(DATA_FILE):
+        return
+    try:
+        with open(DATA_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        # Only load if not already populated this session
+        if data.get('user_db'):
+            st.session_state['user_db'] = data['user_db']
+        if data.get('all_chats'):
+            st.session_state['all_chats'] = data['all_chats']
+        if data.get('all_summaries'):
+            st.session_state['all_summaries'] = data['all_summaries']
+        if data.get('all_plans'):
+            st.session_state['all_plans'] = data['all_plans']
+    except Exception:
+        pass  # Corrupt file — start fresh
+
+def save_data():
+    """Persist current session data to JSON file."""
+    try:
+        data = {
+            'user_db':       st.session_state.get('user_db', {}),
+            'all_chats':     st.session_state.get('all_chats', {}),
+            'all_summaries': st.session_state.get('all_summaries', {}),
+            'all_plans':     st.session_state.get('all_plans', {}),
+        }
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
 
 # ---------------------- ENTRY POINT ----------------------
 st.set_page_config(page_title="StudyPilot", page_icon="✈️", layout="wide")
@@ -1071,6 +1115,11 @@ defaults = {
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+# Load persisted data once per session (only when keys are freshly initialized)
+if 'data_loaded' not in st.session_state:
+    load_data()
+    st.session_state['data_loaded'] = True
 
 if st.session_state['logged_in']:
     render_main_app()
