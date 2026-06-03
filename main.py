@@ -8,6 +8,8 @@ import random
 import re
 import smtplib
 import os
+import difflib
+import pyperclip
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
@@ -32,7 +34,7 @@ def send_otp_email(recipient_email, otp_code):
                     <table width="480" cellpadding="0" cellspacing="0" style="background:#111827;border-radius:16px;overflow:hidden;border:1px solid #1F2937;">
                         <tr><td style="background:linear-gradient(135deg,#1D4ED8,#2563EB);padding:32px;text-align:center;">
                             <h1 style="margin:0;color:#fff;font-size:26px;font-weight:800;">✈️ StudyPilot</h1>
-                            <p style="margin:6px 0 0;color:#BFDBFE;font-size:13px;">Your AI-Powered Learning Assistant</p>
+                            <p style="margin:6px 0 0;color:#BFDBFE;font-size:13px;">Your Learning Assistant</p>
                         </td></tr>
                         <tr><td style="padding:36px 40px;">
                             <p style="color:#9CA3AF;font-size:14px;margin:0 0 8px;">Your verification code is:</p>
@@ -89,7 +91,7 @@ def prepare_data():
                 "Python is a high-level interpreted programming language known for its simple readable syntax.",
                 "Machine Learning is a field of AI that enables systems to learn from data automatically.",
                 "DSA stands for Data Structures and Algorithms — the foundation of efficient programming.",
-                "A list is an ordered mutable collection. Example: my_list = [1 2 3]"
+                "A list is an ordered mutable collection. Example: my_list = [1, 2, 3]"
             ]
         }
         df = pd.DataFrame(data)
@@ -99,34 +101,67 @@ def prepare_data():
 
 df, vectorizer, tfidf_matrix = prepare_data()
 
+# ---------------------- SPELL CORRECTION ----------------------
+def correct_spelling(text):
+    """Correct spelling using difflib against known question vocabulary."""
+    all_questions = " ".join(df["question"].values).lower()
+    vocab = list(set(all_questions.split()))
+    words = text.lower().split()
+    corrected = []
+    corrections = {}
+    for word in words:
+        if len(word) <= 2:
+            corrected.append(word)
+            continue
+        matches = difflib.get_close_matches(word, vocab, n=1, cutoff=0.75)
+        if matches and matches[0] != word:
+            corrections[word] = matches[0]
+            corrected.append(matches[0])
+        else:
+            corrected.append(word)
+    return " ".join(corrected), corrections
+
 def get_smart_response(user_query):
     score = sia.polarity_scores(user_query)
-    user_vec = vectorizer.transform([user_query])
+    corrected_query, corrections = correct_spelling(user_query)
+    user_vec = vectorizer.transform([corrected_query])
     similarity = cosine_similarity(user_vec, tfidf_matrix)
     idx = similarity.argmax()
+    spell_note = ""
+    if corrections:
+        fixes = ", ".join([f"'{k}' → '{v}'" for k, v in corrections.items()])
+        spell_note = f"📝 *Spell check: {fixes}*\n\n"
     if similarity[0][idx] < 0.2:
-        return "I'm not sure about that. Try asking about Python concepts like functions classes lists recursion sorting algorithms etc.", score
-    return df.iloc[idx]["answer"], score
+        return spell_note + "I'm not sure about that. Try asking about Python concepts like functions, classes, lists, recursion, or sorting algorithms.", score, corrected_query
+    return spell_note + df.iloc[idx]["answer"], score, corrected_query
 
+# ---------------------- MOTIVATIONAL ENGINE ----------------------
 MOTIVATIONAL_BANK = {
     "positive": [
-        "Incredible energy! You are absolutely paving your way to a high-paying role right now.",
-        "Your focus is top-tier today! Keep riding this momentum.",
-        "Logic and momentum are on your side. Let's conquer these code structures!",
-        "Brilliant mindset. Consistent efforts like this pay off massively in technical interviews."
+        "You're absolutely crushing it today! This kind of energy is exactly what separates good students from great engineers. Keep going!",
+        "Your focus is top-tier right now! Every problem you solve today is building the foundation of your future career.",
+        "Love the positive energy! You're in the zone — this is when the best learning happens. Don't stop now!",
+        "Brilliant mindset! Consistent sessions like this compound over time into real mastery. You're on the right path."
     ],
     "neutral": [
-        "Clear steady execution wins the race. Let's make this session count.",
-        "One step at a time one line of code at a time. Consistency is key.",
-        "Progress is built on quiet focus days. You're doing the hard work right now.",
-        "Lock in your focus. Building mastery takes steady rhythm."
+        "Steady focus is underrated. Most breakthroughs happen not in bursts of excitement but in quiet sessions like this one.",
+        "One concept at a time, one session at a time. You're building something that will last a lifetime.",
+        "Even on average days, showing up is the most powerful thing you can do. You're already ahead of most.",
+        "Calm and consistent beats intense and irregular every single time. Trust the process."
     ],
     "negative": [
-        "Take a deep breath. Even small steps on exhausting days count toward your grand goals.",
-        "Be gentle with your mind right now. Learning hard concepts when tired is true dedication.",
-        "Burnout is the enemy of progress. We adapted this timeline specifically to support you.",
-        "You don't have to be perfect — just try. Let's break this down into micro-wins."
+        "Hey — it's okay to be tired. Even studying for 20 minutes today when you're exhausted shows real character. I've got you.",
+        "Be kind to your mind right now. Rest is not the opposite of progress — it's part of it. Let's take this gently.",
+        "You're here even when you don't feel like it. That's not weakness — that's discipline. Let's take it slow today.",
+        "Hard days build the strongest students. Take a deep breath. We'll break this into the smallest possible steps together.",
+        "I see you pushing through. That matters more than you know. Let's make even this tough session count."
     ]
+}
+
+CHECKIN_MESSAGES = {
+    "positive": "You seem to be in great spirits today! Let's channel that energy into a powerful session.",
+    "neutral": "You're in a steady, focused state. Perfect for deep learning.",
+    "negative": "It sounds like you're having a tough time right now. That's completely okay — we'll build a gentler schedule for you today. You're not alone in this."
 }
 
 def get_motivational_message(sentiment_score):
@@ -135,45 +170,173 @@ def get_motivational_message(sentiment_score):
     avail = [m for m in opts if st.session_state['message_history'].get(m, 0) < 2] or opts
     chosen = random.choice(avail)
     st.session_state['message_history'][chosen] = st.session_state['message_history'].get(chosen, 0) + 1
-    return chosen
+    return chosen, cat, CHECKIN_MESSAGES[cat]
+
+# ---------------------- SUMMARIZER ----------------------
+def clean_summary(text):
+    """Clean T5 output: fix spacing, capitalisation, remove garbage sentences."""
+    # Fix "word ." → "word." and "word , " → "word, "
+    text = re.sub(r'\s+([.,!?;:])', r'\1', text)
+    # Remove stray markdown headings (# Heading) anywhere in the text
+    text = re.sub(r'#+\s+[^\n]+', '', text)
+    text = text.strip()
+
+    sentences = nltk.sent_tokenize(text)
+    clean = []
+    for s in sentences:
+        s = s.strip()
+        if not s:
+            continue
+        # Skip garbage: too short, starts with punctuation, repeated words
+        if len(s.split()) < 4:
+            continue
+        if s.startswith(("'", '"', '.', ',', '&')):
+            continue
+        if s.count('.') > 4:
+            continue
+        if re.search(r'\b(\w+)\s+\1\b', s):  # repeated words like "com com"
+            continue
+        # Capitalise first letter of every sentence
+        s = s[0].upper() + s[1:]
+        clean.append(s)
+
+    # Drop the last sentence if it sounds like a non-sequitur filler
+    filler_patterns = [
+        r"^(but|however|although|yet)\b.*\b(difficult|achieve|goals|wealth)\b",
+        r"^(it|this) (can|could|may) be (a |an )?(good|bad|difficult)",
+    ]
+    if clean:
+        last = clean[-1].lower()
+        for pat in filler_patterns:
+            if re.search(pat, last):
+                clean = clean[:-1]
+                break
+
+    return " ".join(clean)
 
 def smart_summarize(text, target_words):
-    if len(text.split()) <= target_words:
+    input_words = len(text.split())
+    if input_words <= target_words:
         return text.strip()
-    max_tok = min(int(target_words * 1.4), 512)
-    min_tok = max(10, int(target_words * 0.7))
-    raw = summarizer(text, max_length=max_tok, min_length=min_tok, do_sample=False)
-    summary = raw[0]['summary_text']
-    words = summary.split()
-    if len(words) > target_words:
-        words = words[:target_words]
-        summary = " ".join(words)
-        for p in ['.','!','?']:
-            last = summary.rfind(p)
-            if last > len(summary) * 0.6:
-                summary = summary[:last+1]; break
-    return summary.strip()
+
+    # Split into ~400-word chunks for T5
+    words = text.split()
+    chunk_size = 400
+    chunks = [" ".join(words[i:i+chunk_size]) for i in range(0, len(words), chunk_size)]
+    chunks = [c for c in chunks if len(c.split()) >= 20]
+    if not chunks:
+        return text.strip()
+
+    # T5 tokens ≈ 0.75 words. To get `target_words` words out, ask for ~1.4x tokens.
+    # Distribute evenly across chunks, cap at T5's max (512).
+    words_per_chunk = max(50, target_words // len(chunks))
+    max_tok = min(int(words_per_chunk * 1.4), 512)
+    min_tok = max(30, int(words_per_chunk * 1.0))   # min = 100% of target per chunk
+
+    all_summaries = []
+    for chunk in chunks:
+        try:
+            raw = summarizer(chunk, max_length=max_tok, min_length=min_tok, do_sample=False)
+            all_summaries.append(raw[0]['summary_text'])
+        except:
+            all_summaries.append(" ".join(chunk.split()[:words_per_chunk]))
+
+    combined = " ".join(all_summaries)
+    combined = clean_summary(combined)
+
+    # If T5 still produced fewer words than target, pad from the original text
+    combined_words = len(combined.split())
+    if combined_words < target_words:
+        orig_sentences = nltk.sent_tokenize(text)
+        used = set(combined.lower().split()[:20])
+        for s in orig_sentences:
+            if len(combined.split()) >= target_words:
+                break
+            # Add sentences not already captured
+            if s.strip() not in combined:
+                combined = combined + " " + s.strip()
+
+    # Trim to target at a clean sentence boundary
+    sentences = nltk.sent_tokenize(combined)
+    result = []
+    word_count = 0
+    for sent in sentences:
+        sent_words = len(sent.split())
+        if word_count + sent_words <= target_words + 25:
+            result.append(sent)
+            word_count += sent_words
+        else:
+            break
+
+    # If we're still under (T5 just didn't produce enough), keep everything we have
+    if word_count < target_words - 20 and not result:
+        result = sentences
+
+    final = " ".join(result) if result else combined
+
+    # Hard trim only if well over
+    final_words = final.split()
+    if len(final_words) > target_words + 35:
+        final = " ".join(final_words[:target_words + 15])
+        last_dot = final.rfind('.')
+        if last_dot > len(final) * 0.5:
+            final = final[:last_dot + 1]
+
+    return final.strip() if final.strip() else combined
 
 def apply_summary_formatting(raw_text, fmt):
     today = datetime.date.today().strftime("%B %d, %Y")
     sentences = nltk.sent_tokenize(raw_text)
     wc = len(raw_text.split())
     out = f"### Summary ({fmt}) — ~{wc} words\n\n"
+
     if fmt == "Bullet Points":
         out += "#### Core Takeaways\n"
         for s in sentences:
-            if s.strip(): out += f"- {s.strip()}\n"
+            s = s.strip()
+            if s:
+                # Ensure capital + no trailing space before period
+                s = s[0].upper() + s[1:]
+                out += f"- {s}\n"
+
     elif fmt == "Essay":
-        out += f"**Introduction:**\n{raw_text}\n\n"
-        if len(sentences) > 1:
-            out += "**Core Discussion:**\n" + " ".join(sentences[1:]) + "\n\n"
-        out += "**Conclusion:** Consistent notes analysis builds better concept recall."
+        # Split into intro (first 2 sentences), body (middle), conclusion (last 1–2)
+        intro = " ".join(sentences[:2]) if len(sentences) >= 2 else raw_text
+        body  = " ".join(sentences[2:-2]) if len(sentences) > 4 else ""
+        concl = " ".join(sentences[-2:]) if len(sentences) >= 2 else sentences[-1]
+        intro = intro[0].upper() + intro[1:]
+        out += f"**Introduction:** {intro}\n\n"
+        if body:
+            body = body[0].upper() + body[1:]
+            out += f"**Core Discussion:** {body}\n\n"
+        concl = concl[0].upper() + concl[1:]
+        out += f"**Conclusion:** {concl}"
+
     elif fmt == "Letter":
-        out += f"**Date:** {today}  \n**To:** Study Group Peers  \n\nDear Student,  \n\n{raw_text}\n\nBest regards,  \n*{st.session_state['username']}*"
+        body = raw_text[0].upper() + raw_text[1:]
+        out += (
+            f"**Date:** {today}  \n"
+            f"**To:** Study Group Peers  \n\n"
+            f"Dear Student,\n\n"
+            f"{body}\n\n"
+            f"Best regards,  \n"
+            f"*{st.session_state['username']}*"
+        )
+
     elif fmt == "Email":
-        out += f"**Subject:** Lecture Summary — {today}  \n---  \nHi Team,  \n\n> {raw_text}\n\nThanks,  \n**{st.session_state['username']}**"
+        body = raw_text[0].upper() + raw_text[1:]
+        out += (
+            f"**Subject:** Lecture Summary — {today}  \n"
+            f"---  \n"
+            f"Hi Team,\n\n"
+            f"{body}\n\n"
+            f"Thanks,  \n"
+            f"**{st.session_state['username']}**"
+        )
+
     else:
-        out += raw_text
+        out += raw_text[0].upper() + raw_text[1:]
+
     return out
 
 # ---------------------- SIDEBAR ----------------------
@@ -234,15 +397,15 @@ def render_sidebar_section(feature_key, friendly_name):
                 st.rerun()
 
         if st.session_state.get('active_menu_item_id',"") == item_id:
-            st.markdown("""<div style='background:#1A2234;border:1px solid #2D3748;border-radius:12px;
-                padding:6px 6px;margin:2px 0 8px 0;box-shadow:0 8px 24px rgba(0,0,0,0.6);'>""", unsafe_allow_html=True)
+            st.markdown("""<div style='background:#161D2E;border:1px solid #2D3748;border-radius:10px;
+                padding:4px 0;margin:2px 0 6px 0;box-shadow:0 4px 20px rgba(0,0,0,0.6);overflow:hidden;'>""", unsafe_allow_html=True)
             if st.button("↗  Share", key=f"share_{item_id}_{feature_key}", use_container_width=True):
                 st.toast("Link copied!"); st.session_state['active_menu_item_id'] = ""; st.rerun()
             if st.button("✏️  Rename", key=f"ren_{item_id}_{feature_key}", use_container_width=True):
                 st.session_state['editing_item_id'] = item_id
                 st.session_state['rename_feature_target'] = feature_key
                 st.session_state['active_menu_item_id'] = ""; st.rerun()
-            st.markdown("<hr style='margin:4px 2px;border:none;border-top:1px solid #2D3748;'>", unsafe_allow_html=True)
+            st.markdown("<div style='height:1px;background:#2D3748;margin:2px 8px;'></div>", unsafe_allow_html=True)
             if st.button("🗑️  Delete", key=f"del_{item_id}_{feature_key}", use_container_width=True):
                 del history_dict[item_id]
                 st.session_state['active_menu_item_id'] = ""
@@ -289,7 +452,6 @@ def render_main_app():
             </div>""", unsafe_allow_html=True)
 
         st.write("---")
-
         view = st.session_state['current_view']
         if view == "chat": render_sidebar_section("chat", "Chat")
         elif view == "summary": render_sidebar_section("summary", "Summary")
@@ -329,23 +491,7 @@ def render_main_app():
     if st.session_state['current_view'] == "welcome_hub":
         st.markdown(f"<h2 style='margin-bottom:4px;'>Welcome back, {st.session_state['username']}! 👋</h2>", unsafe_allow_html=True)
         st.markdown("<p style='font-size:1.1rem;color:#64748B;margin-top:0;'>Ready to fly through your studies today?</p>", unsafe_allow_html=True)
-        st.write("---")
-        st.markdown("""
-        <div style='display:flex;flex-direction:column;gap:12px;'>
-            <div style='background:#0D1117;border:1px solid #1E2533;border-radius:12px;padding:1rem 1.25rem;'>
-                <span style='color:#60A5FA;font-weight:700;'>💬 Ask Anything</span>
-                <p style='color:#64748B;font-size:0.88rem;margin:4px 0 0;'>Ask any Python ML or DSA question and get instant answers.</p>
-            </div>
-            <div style='background:#0D1117;border:1px solid #1E2533;border-radius:12px;padding:1rem 1.25rem;'>
-                <span style='color:#34D399;font-weight:700;'>📝 Summarize Notes</span>
-                <p style='color:#64748B;font-size:0.88rem;margin:4px 0 0;'>Paste lecture notes and get a clean summary in your preferred format.</p>
-            </div>
-            <div style='background:#0D1117;border:1px solid #1E2533;border-radius:12px;padding:1rem 1.25rem;'>
-                <span style='color:#F59E0B;font-weight:700;'>📅 Study Planner</span>
-                <p style='color:#64748B;font-size:0.88rem;margin:4px 0 0;'>Generate an adaptive Pomodoro schedule based on your mood and subjects.</p>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+
 
     # CHATBOT
     elif st.session_state['current_view'] == "chat":
@@ -362,31 +508,44 @@ def render_main_app():
             msg_id = f"msg_{st.session_state['active_chat_id']}_{idx}"
             if msg['role'] == "user":
                 _, cb, cd = st.columns([3.5, 6, 0.5])
-                with cb: st.markdown(f"<div class='chat-msg user-bubble'>{msg['text']}</div>", unsafe_allow_html=True)
+                with cb:
+                    st.markdown(f"<div class='chat-msg user-bubble'>{msg['text']}</div>", unsafe_allow_html=True)
                 with cd:
                     if st.button("⋮", key=f"dots_chat_{msg_id}"):
                         st.session_state['active_bubble_menu_id'] = msg_id if st.session_state.get('active_bubble_menu_id') != msg_id else ""
                         st.rerun()
             else:
                 cb, cd, _ = st.columns([6, 0.5, 3.5])
-                with cb: st.markdown(f"<div class='chat-msg bot-bubble'>{msg['text']}</div>", unsafe_allow_html=True)
+                with cb:
+                    st.markdown(f"<div class='chat-msg bot-bubble'>{msg['text']}</div>", unsafe_allow_html=True)
                 with cd:
                     if st.button("⋮", key=f"dots_chat_{msg_id}"):
                         st.session_state['active_bubble_menu_id'] = msg_id if st.session_state.get('active_bubble_menu_id') != msg_id else ""
                         st.rerun()
 
             if st.session_state.get('active_bubble_menu_id') == msg_id:
-                _, mc, _ = st.columns([4, 2.5, 3.5])
+                if msg['role'] == "user":
+                    _, mc, _ = st.columns([3.5, 2.2, 4.3])
+                else:
+                    mc_col, _, _ = st.columns([2.2, 4.3, 3.5])
+                    mc = mc_col
                 with mc:
-                    st.markdown("""<div style='background:#1A2234;border:1px solid #2D3748;border-radius:12px;
-                        padding:6px;box-shadow:0 8px 24px rgba(0,0,0,0.6);'>""", unsafe_allow_html=True)
-                    if st.button("📋  Copy", key=f"cp_{msg_id}", use_container_width=True):
-                        st.toast("Copied!"); st.code(msg['text'], language="text")
-                        st.session_state['active_bubble_menu_id'] = ""; st.rerun()
-                    if st.button("↗  Share", key=f"sh_{msg_id}", use_container_width=True):
+                    st.markdown("""<div style='background:#161D2E;border:1px solid #2D3748;border-radius:8px;
+                        padding:2px 0;box-shadow:0 4px 16px rgba(0,0,0,0.5);overflow:hidden;'>""", unsafe_allow_html=True)
+                    if st.button("📋 Copy", key=f"cp_{msg_id}", use_container_width=True):
+                        try:
+                            pyperclip.copy(msg['text'])
+                        except Exception:
+                            pass
+                        st.toast("Copied! ✅")
+                        st.session_state['active_bubble_menu_id'] = ""
+                        st.rerun()
+                    if st.button("↗ Share", key=f"sh_{msg_id}", use_container_width=True):
                         st.toast("Link copied!")
                         st.session_state['active_bubble_menu_id'] = ""; st.rerun()
                     st.markdown("</div>", unsafe_allow_html=True)
+
+
 
         st.write("")
         with st.form("chat_form", clear_on_submit=True):
@@ -394,7 +553,7 @@ def render_main_app():
             send = st.form_submit_button("Send →", use_container_width=True)
 
         if send and chat_input.strip():
-            ans, sentiment = get_smart_response(chat_input)
+            ans, sentiment, corrected = get_smart_response(chat_input)
             if sentiment['compound'] >= 0.05: st.toast("Positive vibes! 😊")
             elif sentiment['compound'] <= -0.05: st.toast("You seem stressed. Take it easy! 💙")
             active_chat.append({"role":"user","text":chat_input})
@@ -412,13 +571,16 @@ def render_main_app():
             st.session_state['active_summary_id'] = list(st.session_state['all_summaries'].keys())[0]
 
         node = st.session_state['all_summaries'].get(st.session_state['active_summary_id'])
-        raw_text = st.text_area("", value=node['text'], height=220, placeholder="Paste your lecture notes here...", label_visibility="collapsed")
+        raw_text = st.text_area("", value=node['text'], height=220,
+                                placeholder="Paste your lecture notes here...", label_visibility="collapsed")
         if raw_text.strip():
-            st.caption(f"📄 Input: {len(raw_text.split())} words")
+            input_wc = len(raw_text.split())
+            st.caption(f"📄 Input: {input_wc} words")
 
         cc, cf = st.columns(2)
         with cc:
-            target_words = st.number_input("Target word count:", min_value=10, max_value=500, value=int(node.get('word_count',80)), step=10)
+            target_words = st.number_input("Target word count:", min_value=10, max_value=500,
+                                           value=int(node.get('word_count',80)), step=10)
         with cf:
             fmt = st.selectbox("Output format:", ["Plain Text","Bullet Points","Essay","Letter","Email"],
                 index=["Plain Text","Bullet Points","Essay","Letter","Email"].index(node.get('format_style',"Plain Text")))
@@ -433,6 +595,7 @@ def render_main_app():
                     summary_text = smart_summarize(raw_text, target_words)
                     formatted = apply_summary_formatting(summary_text, fmt)
                     node['summary'] = formatted
+                    node['raw_summary'] = summary_text
                     if node['title'].startswith("Untitled"):
                         node['title'] = raw_text[:18]+"..."
                     st.session_state['all_summaries'][st.session_state['active_summary_id']] = node
@@ -451,17 +614,23 @@ def render_main_app():
                 with mc:
                     st.markdown("""<div style='background:#1A2234;border:1px solid #2D3748;border-radius:12px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,0.6);'>""", unsafe_allow_html=True)
                     if st.button("📋  Copy", key="cp_sum", use_container_width=True):
-                        st.toast("Copied!"); st.code(node['summary'], language="markdown")
+                        st.session_state['show_copy_summary'] = True
                         st.session_state['active_bubble_menu_id'] = ""; st.rerun()
                     if st.button("↗  Share", key="sh_sum", use_container_width=True):
                         st.toast("Link copied!")
                         st.session_state['active_bubble_menu_id'] = ""; st.rerun()
                     st.markdown("</div>", unsafe_allow_html=True)
 
+            if st.session_state.get('show_copy_summary', False):
+                st.code(node.get('raw_summary', node['summary']), language="text")
+                if st.button("✕ Close", key="close_copy_sum"):
+                    st.session_state['show_copy_summary'] = False; st.rerun()
+
     # PLANNER
     elif st.session_state['current_view'] == "planner":
         st.markdown("### 📅 Adaptive Study Planner")
-        st.caption("Customizes Pomodoro intervals based on your current emotional state.")
+        st.caption("Your schedule adapts based on how you feel — because your wellbeing matters as much as your grades.")
+
         if not st.session_state['all_plans']:
             st.session_state['all_plans']["planner_default"] = {"subjects":"","weak":"","mood":"","schedule":[],"title":"Untitled Plan"}
             st.session_state['active_planner_id'] = "planner_default"
@@ -469,55 +638,199 @@ def render_main_app():
             st.session_state['active_planner_id'] = list(st.session_state['all_plans'].keys())[0]
 
         plan = st.session_state['all_plans'].get(st.session_state['active_planner_id'])
+
         with st.form("planner_form"):
-            c1,c2 = st.columns(2)
+            c1, c2 = st.columns(2)
             with c1:
-                subj = st.text_input("Subjects (comma separated):", value=plan['subjects'], placeholder="e.g. Python ML DSA")
-                start_time = st.time_input("Start Time:", datetime.time(9,0))
+                subj = st.text_input("Subjects (comma separated):", value=plan['subjects'],
+                                     placeholder="e.g. Python, ML, DSA")
+                start_time = st.time_input("Start Time:", datetime.time(9, 0))
             with c2:
-                weak = st.text_input("Your Weak Subject:", value=plan['weak'], placeholder="e.g. Python")
-                mood = st.text_input("How are you feeling?", value=plan['mood'], placeholder="e.g. Tired happy stressed")
-            gen = st.form_submit_button("🗓️  Generate Schedule", use_container_width=True)
+                weak = st.text_input("Your Weak Subject:", value=plan['weak'],
+                                     placeholder="e.g. Python")
+                end_time = st.time_input("End Time:", datetime.time(12, 0))
+
+            mood = st.text_input("How are you feeling right now?", value=plan['mood'],
+                                 placeholder="e.g. tired, stressed, excited, motivated, anxious...")
+            gen = st.form_submit_button("🗓️  Generate My Schedule", use_container_width=True)
 
         if gen:
             slist = [s.strip() for s in subj.split(",") if s.strip()]
-            if not slist: st.error("Enter at least one subject.")
+            if not slist:
+                st.error("Please enter at least one subject.")
+            elif end_time <= start_time:
+                st.error("End time must be after start time.")
             else:
                 mood_score = sia.polarity_scores(mood)['compound']
-                boost = get_motivational_message(mood_score)
-                plan.update({'subjects':subj,'weak':weak,'mood':mood})
+                boost, mood_cat, checkin = get_motivational_message(mood_score)
+                plan.update({'subjects': subj, 'weak': weak, 'mood': mood})
                 if plan['title'].startswith("Untitled") and slist:
                     plan['title'] = f"Plan: {slist[0]}"
-                short_break = 10 if mood_score < -0.1 else 5
+
+                # Calculate available time
+                start_dt = datetime.datetime.combine(datetime.date.today(), start_time)
+                end_dt = datetime.datetime.combine(datetime.date.today(), end_time)
+                total_minutes = int((end_dt - start_dt).total_seconds() / 60)
+
+                # Adapt intervals based on mood
+                if mood_score <= -0.3:
+                    work_mins = 20
+                    break_mins = 10
+                    mode = "gentle"
+                elif mood_score <= -0.1:
+                    work_mins = 25
+                    break_mins = 10
+                    mode = "mellow"
+                else:
+                    work_mins = 25
+                    break_mins = 5
+                    mode = "classic"
+
+                # Build schedule fitting within available time
                 schedule = []
-                t = datetime.datetime.combine(datetime.date.today(), start_time)
-                for sub in slist:
-                    for _ in range(2 if sub.lower()==weak.strip().lower() else 1):
-                        end = t + datetime.timedelta(minutes=25)
-                        schedule.append({"range":f"{t.strftime('%I:%M %p')} - {end.strftime('%I:%M %p')}",
-                            "subject":sub,"break_len":short_break,
-                            "next_resume":(end+datetime.timedelta(minutes=short_break)).strftime('%I:%M %p'),
-                            "is_mellow":mood_score < -0.1})
-                        t = end + datetime.timedelta(minutes=short_break)
-                plan['schedule'] = schedule; plan['boost'] = boost
+                t = start_dt
+                # Weight weak subject double
+                weighted = []
+                for s in slist:
+                    weighted.append(s)
+                    if s.lower() == weak.strip().lower():
+                        weighted.append(s)
+
+                i = 0
+                session_num = 1
+                while t < end_dt:
+                    remaining = int((end_dt - t).total_seconds() / 60)
+                    if remaining < work_mins:
+                        break
+                    sub = weighted[i % len(weighted)]
+                    actual_work = min(work_mins, remaining)
+                    end_session = t + datetime.timedelta(minutes=actual_work)
+                    actual_break = min(break_mins, int((end_dt - end_session).total_seconds() / 60))
+                    resume_at = end_session + datetime.timedelta(minutes=actual_break)
+
+                    schedule.append({
+                        "session": session_num,
+                        "start": t.strftime('%I:%M %p'),
+                        "end": end_session.strftime('%I:%M %p'),
+                        "subject": sub,
+                        "is_weak": sub.lower() == weak.strip().lower(),
+                        "break_len": actual_break,
+                        "resume": resume_at.strftime('%I:%M %p'),
+                        "mode": mode
+                    })
+                    t = resume_at
+                    i += 1
+                    session_num += 1
+
+                plan['schedule'] = schedule
+                plan['boost'] = boost
+                plan['checkin'] = checkin
+                plan['mood_cat'] = mood_cat
+                plan['mode'] = mode
+                plan['total_minutes'] = total_minutes
                 st.session_state['all_plans'][st.session_state['active_planner_id']] = plan
                 st.rerun()
 
         if plan.get('schedule'):
             st.write("---")
-            st.info(plan['boost'])
-            if plan['schedule'][0]['is_mellow']:
-                st.warning("🌙 Mellow Mode: 25 min focus + 10 min recovery breaks.")
+
+            # Emotional check-in card
+            mood_cat = plan.get('mood_cat', 'neutral')
+            checkin = plan.get('checkin', '')
+            checkin_colors = {"positive": "#064E3B", "neutral": "#1E3A5F", "negative": "#3B1F1F"}
+            checkin_border = {"positive": "#34D399", "neutral": "#60A5FA", "negative": "#F87171"}
+            checkin_icon = {"positive": "🌟", "neutral": "🎯", "negative": "💙"}
+
+            st.markdown(f"""
+            <div style='background:{checkin_colors[mood_cat]};border:1px solid {checkin_border[mood_cat]};
+                border-radius:12px;padding:1rem 1.25rem;margin-bottom:1rem;'>
+                <span style='font-size:1.1rem;font-weight:700;color:{checkin_border[mood_cat]};'>{checkin_icon[mood_cat]} Mood Check-in</span>
+                <p style='color:#E2E8F0;margin:6px 0 0;font-size:0.95rem;'>{checkin}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Motivational message
+            st.markdown(f"""
+            <div style='background:#0D1117;border:1px solid #1E2533;border-left:4px solid #F59E0B;
+                border-radius:12px;padding:1rem 1.25rem;margin-bottom:1rem;'>
+                <span style='color:#F59E0B;font-weight:700;'>✨ Your Motivation</span>
+                <p style='color:#CBD5E1;margin:6px 0 0;font-size:0.95rem;font-style:italic;'>"{plan['boost']}"</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Mode banner
+            mode = plan.get('mode', 'classic')
+            if mode == "gentle":
+                st.warning("🌙 Gentle Mode: 20 min focus + 10 min recovery. You've got this, one small step at a time.")
+            elif mode == "mellow":
+                st.warning("🌙 Mellow Mode: 25 min focus + 10 min recovery. Taking care of yourself is part of studying.")
             else:
-                st.success("⚡ Classic Mode: 25 min focus + 5 min breaks.")
-            st.markdown("#### Your Schedule")
+                st.success("⚡ Classic Mode: 25 min focus + 5 min breaks. You're sharp — let's make every session count!")
+
+            # Schedule stats
+            total = plan.get('total_minutes', 0)
+            sessions = len(plan['schedule'])
+            st.markdown(f"""
+            <div style='display:flex;gap:12px;margin:1rem 0;'>
+                <div style='background:#0D1117;border:1px solid #1E2533;border-radius:10px;padding:0.75rem 1rem;flex:1;text-align:center;'>
+                    <div style='color:#60A5FA;font-size:1.4rem;font-weight:800;'>{sessions}</div>
+                    <div style='color:#64748B;font-size:0.8rem;'>Sessions</div>
+                </div>
+                <div style='background:#0D1117;border:1px solid #1E2533;border-radius:10px;padding:0.75rem 1rem;flex:1;text-align:center;'>
+                    <div style='color:#34D399;font-size:1.4rem;font-weight:800;'>{total}</div>
+                    <div style='color:#64748B;font-size:0.8rem;'>Total Minutes</div>
+                </div>
+                <div style='background:#0D1117;border:1px solid #1E2533;border-radius:10px;padding:0.75rem 1rem;flex:1;text-align:center;'>
+                    <div style='color:#F59E0B;font-size:1.4rem;font-weight:800;'>{plan["schedule"][0]["break_len"]}</div>
+                    <div style='color:#64748B;font-size:0.8rem;'>Break Mins</div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Clean table
+            st.markdown("#### 📋 Your Schedule")
+            table_rows = ""
             for s in plan['schedule']:
-                st.markdown(f"""<div style='background:#0D1117;padding:1rem;border-radius:10px;
-                    margin-bottom:0.6rem;border:1px solid #1E2533;border-left:4px solid #F59E0B;'>
-                    <span style='color:#60A5FA;font-weight:700;'>⏱️ {s["range"]}</span> &nbsp;|&nbsp;
-                    Focus: <b style='color:#F1F5F9;'>{s["subject"]}</b>
-                    <br><span style='color:#9CA3AF;font-size:0.85rem;'>☕ {s["break_len"]} min break → Resume at {s["next_resume"]}</span>
-                </div>""", unsafe_allow_html=True)
+                highlight = "#1A2F1A" if s['is_weak'] else "#0D1117"
+                badge = " <span style='background:#F59E0B;color:#000;font-size:0.7rem;padding:1px 6px;border-radius:4px;font-weight:700;'>WEAK</span>" if s['is_weak'] else ""
+                table_rows += f"""
+                <tr style='border-bottom:1px solid #1E2533;background:{highlight};'>
+                    <td style='padding:10px 12px;color:#64748B;font-size:0.85rem;'>#{s['session']}</td>
+                    <td style='padding:10px 12px;color:#60A5FA;font-weight:700;white-space:nowrap;'>{s['start']}</td>
+                    <td style='padding:10px 12px;color:#60A5FA;font-weight:700;white-space:nowrap;'>{s['end']}</td>
+                    <td style='padding:10px 12px;color:#F1F5F9;font-weight:600;'>{s['subject']}{badge}</td>
+                    <td style='padding:10px 12px;color:#9CA3AF;font-size:0.88rem;'>☕ {s['break_len']} min → {s['resume']}</td>
+                </tr>"""
+
+            st.markdown(f"""
+            <div style='overflow-x:auto;border-radius:12px;border:1px solid #1E2533;margin-top:0.5rem;'>
+                <table style='width:100%;border-collapse:collapse;font-family:inherit;'>
+                    <thead>
+                        <tr style='background:#111827;border-bottom:2px solid #1E2533;'>
+                            <th style='padding:10px 12px;text-align:left;color:#64748B;font-size:0.8rem;font-weight:600;text-transform:uppercase;'>#</th>
+                            <th style='padding:10px 12px;text-align:left;color:#64748B;font-size:0.8rem;font-weight:600;text-transform:uppercase;'>Start</th>
+                            <th style='padding:10px 12px;text-align:left;color:#64748B;font-size:0.8rem;font-weight:600;text-transform:uppercase;'>End</th>
+                            <th style='padding:10px 12px;text-align:left;color:#64748B;font-size:0.8rem;font-weight:600;text-transform:uppercase;'>Subject</th>
+                            <th style='padding:10px 12px;text-align:left;color:#64748B;font-size:0.8rem;font-weight:600;text-transform:uppercase;'>Break</th>
+                        </tr>
+                    </thead>
+                    <tbody>{table_rows}</tbody>
+                </table>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Closing emotional note
+            if mood_cat == "negative":
+                st.markdown("""
+                <div style='background:#1A0F0F;border:1px solid #7F1D1D;border-radius:12px;padding:1rem 1.25rem;margin-top:1rem;'>
+                    <span style='color:#F87171;font-weight:700;'>💙 A Note For You</span>
+                    <p style='color:#FCA5A5;margin:6px 0 0;font-size:0.9rem;'>
+                    Remember — it's okay to not be okay. If at any point you feel overwhelmed, 
+                    step away from studying. Your mental health always comes first. 
+                    Even completing just one session today is a win. I'm proud of you for showing up. 🤍
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
 
 # ---------------------- AUTH ----------------------
 def render_login_page():
@@ -526,7 +839,7 @@ def render_login_page():
         st.markdown("""<div style='text-align:center;margin:2rem 0 1.5rem;'>
             <div style='font-size:3rem;'>✈️</div>
             <h1 style='font-weight:900;font-size:2.4rem;margin:0;letter-spacing:-1px;'>StudyPilot</h1>
-            <p style='color:#6B7280;font-size:0.95rem;margin:6px 0 0;'>Your AI-Powered Learning Assistant</p>
+            <p style='color:#6B7280;font-size:0.95rem;margin:6px 0 0;'>Your Learning Assistant</p>
         </div>""", unsafe_allow_html=True)
 
         if st.session_state['auth_view'] == "welcome":
@@ -551,7 +864,7 @@ def render_login_page():
                     st.session_state['username'] = u.strip(); st.rerun()
                 else:
                     st.error("❌ Invalid username or password.")
-            cl,cr = st.columns(2)
+            cl, cr = st.columns(2)
             with cl:
                 if st.button("⬅ Back", key="back_login", use_container_width=True):
                     st.session_state['auth_view'] = "welcome"; st.rerun()
@@ -562,7 +875,6 @@ def render_login_page():
 
         elif st.session_state['auth_view'] == "register":
             st.markdown("### Create Account")
-
             if st.session_state['reg_step'] == "input_email":
                 with st.form("reg_email_form"):
                     ei = st.text_input("Your Email Address", placeholder="name@gmail.com")
@@ -571,11 +883,11 @@ def render_login_page():
                     if not validate_email(ei.strip()):
                         st.error("❌ Enter a valid email.")
                     else:
-                        otp = str(random.randint(100000,999999))
-                        ok,err = send_otp_email(ei.strip(), otp)
+                        otp = str(random.randint(100000, 999999))
+                        ok, err = send_otp_email(ei.strip(), otp)
                         if ok:
-                            st.session_state.update({'generated_otp':otp,'otp_timestamp':datetime.datetime.now(),
-                                                     'temp_identity':ei.strip(),'reg_step':"verify_otp"})
+                            st.session_state.update({'generated_otp': otp, 'otp_timestamp': datetime.datetime.now(),
+                                                     'temp_identity': ei.strip(), 'reg_step': "verify_otp"})
                             st.success(f"✅ OTP sent to {ei.strip()}!"); st.rerun()
                         else:
                             st.error(f"❌ Failed: {err}")
@@ -587,10 +899,10 @@ def render_login_page():
                 if is_otp_expired():
                     st.error("⏰ OTP expired.")
                     if st.button("Resend OTP", use_container_width=True):
-                        otp = str(random.randint(100000,999999))
-                        ok,_ = send_otp_email(st.session_state['temp_identity'], otp)
+                        otp = str(random.randint(100000, 999999))
+                        ok, _ = send_otp_email(st.session_state['temp_identity'], otp)
                         if ok:
-                            st.session_state.update({'generated_otp':otp,'otp_timestamp':datetime.datetime.now()})
+                            st.session_state.update({'generated_otp': otp, 'otp_timestamp': datetime.datetime.now()})
                             st.success("New OTP sent!"); st.rerun()
                 else:
                     with st.form("otp_form"):
@@ -621,10 +933,8 @@ def render_login_page():
                             "identity": st.session_state['temp_identity'],
                             "password": hash_password(rp.strip())
                         }
-                        # AUTO LOGIN after registration
                         st.session_state['logged_in'] = True
                         st.session_state['username'] = ru.strip()
-                        st.success("🎉 Welcome to StudyPilot!")
                         st.rerun()
 
         elif st.session_state['auth_view'] == "forgot_password":
@@ -634,13 +944,13 @@ def render_login_page():
                     re_email = st.text_input("Registered Email")
                     lookup = st.form_submit_button("Send Reset OTP →", use_container_width=True)
                 if lookup:
-                    found = next((u for u,m in st.session_state['user_db'].items() if m['identity']==re_email.strip()), None)
+                    found = next((u for u, m in st.session_state['user_db'].items() if m['identity'] == re_email.strip()), None)
                     if found:
-                        otp = str(random.randint(100000,999999))
-                        ok,err = send_otp_email(re_email.strip(), otp)
+                        otp = str(random.randint(100000, 999999))
+                        ok, err = send_otp_email(re_email.strip(), otp)
                         if ok:
-                            st.session_state.update({'recovery_target_user':found,'generated_otp':otp,
-                                                     'otp_timestamp':datetime.datetime.now(),'forgot_step':"verify_otp"})
+                            st.session_state.update({'recovery_target_user': found, 'generated_otp': otp,
+                                                     'otp_timestamp': datetime.datetime.now(), 'forgot_step': "verify_otp"})
                             st.success("✅ OTP sent!"); st.rerun()
                         else: st.error(f"❌ {err}")
                     else: st.error("❌ No account found.")
@@ -649,7 +959,6 @@ def render_login_page():
 
             elif st.session_state['forgot_step'] == "verify_otp":
                 st.info("📬 OTP sent to your registered email.")
-                st.caption(f"Account: **{st.session_state['recovery_target_user']}**")
                 if not is_otp_expired():
                     with st.form("forgot_otp_form"):
                         rotp = st.text_input("6-Digit OTP", max_chars=6)
@@ -661,7 +970,6 @@ def render_login_page():
                 else: st.error("⏰ OTP expired.")
 
             elif st.session_state['forgot_step'] == "reset_password":
-                st.write(f"Reset for: **{st.session_state['recovery_target_user']}**")
                 with st.form("reset_form"):
                     np1 = st.text_input("New Password", type="password")
                     np2 = st.text_input("Confirm", type="password")
@@ -683,7 +991,6 @@ if 'app_theme' not in st.session_state:
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap');
 
-/* ===== HIDE ALL STREAMLIT CHROME ===== */
 #MainMenu { display:none !important; }
 footer { display:none !important; }
 header { display:none !important; }
@@ -723,24 +1030,24 @@ button[key="logout_btn"]:hover { background:#DC2626 !important; color:#fff !impo
 
 button[key^="dots_"] { background:transparent !important; color:#475569 !important; border:none !important; font-size:1.4rem !important; height:auto !important; padding:0 !important; box-shadow:none !important; }
 button[key^="dots_"]:hover { color:#F1F5F9 !important; }
-
 button[key^="sel_"] { background:#0D1117 !important; text-align:left !important; justify-content:flex-start !important; color:#CBD5E1 !important; font-size:0.88rem !important; }
 
-button[key^="share_"], button[key^="ren_"], button[key^="cp_"], button[key^="sh_"] {
-    background:#243040 !important; border:none !important; color:#E2E8F0 !important;
-    font-size:0.9rem !important; height:2.4em !important; border-radius:8px !important;
+button[key^="share_"], button[key^="ren_"], button[key^="cp_"], button[key^="sh_"], button[key^="close_"] {
+    background:transparent !important; border:none !important; color:#CBD5E1 !important;
+    font-size:0.8rem !important; height:1.9em !important; border-radius:6px !important;
     text-align:left !important; justify-content:flex-start !important; font-weight:500 !important;
+    padding:0 10px !important; box-shadow:none !important;
 }
 button[key^="share_"]:hover, button[key^="ren_"]:hover, button[key^="cp_"]:hover, button[key^="sh_"]:hover {
-    background:#2563EB !important; color:#fff !important;
+    background:#1E2D45 !important; color:#fff !important;
 }
 button[key^="del_"] {
-    background:#2A1515 !important; border:none !important; color:#F87171 !important;
-    font-size:0.9rem !important; height:2.4em !important; border-radius:8px !important;
+    background:transparent !important; border:none !important; color:#F87171 !important;
+    font-size:0.8rem !important; height:1.9em !important; border-radius:6px !important;
     text-align:left !important; justify-content:flex-start !important; font-weight:500 !important;
+    padding:0 10px !important; box-shadow:none !important;
 }
-button[key^="del_"]:hover { background:#DC2626 !important; color:#fff !important; }
-
+button[key^="del_"]:hover { background:#3B1F1F !important; color:#FCA5A5 !important; }
 button[key^="new_"] { background:#0F1E38 !important; color:#60A5FA !important; border:1px dashed #3B82F6 !important; font-weight:700 !important; }
 button[key^="new_"]:hover { background:#2563EB !important; color:#fff !important; border-color:#2563EB !important; }
 
@@ -748,20 +1055,20 @@ button[key^="new_"]:hover { background:#2563EB !important; color:#fff !important
 .stAlert { border-radius:10px !important; }
 </style>""", unsafe_allow_html=True)
 
-# SESSION STATE
 defaults = {
-    'logged_in':False,'username':'','message_history':{},
-    'show_profile_tray':False,'active_menu_item_id':'','active_bubble_menu_id':'',
-    'current_view':'welcome_hub','auth_view':'welcome',
-    'reg_step':'input_email','forgot_step':'verify_email',
-    'generated_otp':None,'otp_timestamp':None,'temp_identity':'',
-    'recovery_target_user':'','editing_item_id':'','rename_feature_target':'',
-    'user_db':{"admin":{"identity":"admin@studypilot.com","password":hash_password("student123")}},
-    'all_chats':{},'active_chat_id':'',
-    'all_summaries':{},'active_summary_id':'',
-    'all_plans':{},'active_planner_id':''
+    'logged_in': False, 'username': '', 'message_history': {},
+    'show_profile_tray': False, 'active_menu_item_id': '', 'active_bubble_menu_id': '',
+    'current_view': 'welcome_hub', 'auth_view': 'welcome',
+    'reg_step': 'input_email', 'forgot_step': 'verify_email',
+    'generated_otp': None, 'otp_timestamp': None, 'temp_identity': '',
+    'recovery_target_user': '', 'editing_item_id': '', 'rename_feature_target': '',
+    'show_copy_summary': False,
+    'user_db': {"admin": {"identity": "admin@studypilot.com", "password": hash_password("student123")}},
+    'all_chats': {}, 'active_chat_id': '',
+    'all_summaries': {}, 'active_summary_id': '',
+    'all_plans': {}, 'active_planner_id': ''
 }
-for k,v in defaults.items():
+for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
