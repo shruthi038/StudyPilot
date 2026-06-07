@@ -2,27 +2,241 @@ import streamlit as st
 import sqlite3
 import json
 import os
-import pandas as pd
-import numpy as np
-import nltk
+import re
 import datetime
 import hashlib
 import random
-import re
 import smtplib
 import difflib
+import requests
 import pyperclip
+import nltk
+import pandas as pd
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from transformers import pipeline
 
 load_dotenv()
-GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS")
+GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
+GROQ_API_KEY       = os.getenv("GROQ_API_KEY")
+GROQ_MODEL         = "llama-3.3-70b-versatile"
+GROQ_URL           = "https://api.groq.com/openai/v1/chat/completions"
+
+def _groq_available() -> bool:
+    return bool(GROQ_API_KEY) and not st.session_state.get("groq_exhausted", False)
+
+def call_groq(messages: list, max_tokens: int = 1024) -> tuple[str, bool]:
+    if not GROQ_API_KEY:
+        return "", False
+    try:
+        resp = requests.post(
+            GROQ_URL,
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json={"model": GROQ_MODEL, "messages": messages, "max_tokens": max_tokens, "temperature": 0.7},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip(), True
+    except requests.exceptions.HTTPError:
+        code = resp.status_code
+        if code in (401, 429):
+            st.session_state["groq_exhausted"] = True
+        return "", False
+    except Exception:
+        return "", False
+
+@st.cache_resource(show_spinner="Loading offline AI models (first run only)…")
+def load_offline_models():
+    nltk.download("vader_lexicon", quiet=True)
+    nltk.download("punkt",         quiet=True)
+    nltk.download("punkt_tab",     quiet=True)
+    sia        = SentimentIntensityAnalyzer()
+    summarizer = pipeline("summarization", model="t5-small")
+    try:
+        df = pd.read_csv("chatbot_data.csv")
+    except Exception:
+        df = pd.DataFrame({
+            "question": ["what is python", "what is ml", "what is dsa", "what is a list"],
+            "answer": [
+                "Python is a high-level interpreted programming language known for its simple readable syntax.",
+                "Machine Learning is a field of AI that enables systems to learn from data automatically.",
+                "DSA stands for Data Structures and Algorithms — the foundation of efficient programming.",
+                "A list is an ordered mutable collection. Example: my_list = [1, 2, 3]",
+            ],
+        })
+    vectorizer   = TfidfVectorizer(ngram_range=(1, 2), stop_words="english")
+    tfidf_matrix = vectorizer.fit_transform(df["question"].values.astype("U"))
+    return sia, summarizer, df, vectorizer, tfidf_matrix
+
+def get_sia():
+    sia, *_ = load_offline_models()
+    return sia
+
+def _correct_spelling(text: str, df) -> tuple[str, dict]:
+    vocab   = list(set(" ".join(df["question"].values).lower().split()))
+    words   = text.lower().split()
+    out, fixes = [], {}
+    for w in words:
+        if len(w) <= 2:
+            out.append(w); continue
+        m = difflib.get_close_matches(w, vocab, n=1, cutoff=0.75)
+        if m and m[0] != w:
+            fixes[w] = m[0]; out.append(m[0])
+        else:
+            out.append(w)
+    return " ".join(out), fixes
+
+def _t5_chat_response(user_query: str, df, vectorizer, tfidf_matrix) -> str:
+    corrected, corrections = _correct_spelling(user_query, df)
+    uv  = vectorizer.transform([corrected])
+    sim = cosine_similarity(uv, tfidf_matrix)
+    idx = sim.argmax()
+    note = ""
+    if corrections:
+        note = "📝 *Spell check: " + ", ".join(f"'{k}' → '{v}'" for k, v in corrections.items()) + "*\n\n"
+    if sim[0][idx] < 0.2:
+        return note + "I'm not sure about that. Try asking about Python, ML, DSA, or algorithms."
+    return note + df.iloc[idx]["answer"]
+
+def _clean_t5(text: str) -> str:
+    text = re.sub(r'\s+([.,!?;:])', r'\1', text).strip()
+    sentences, out = nltk.sent_tokenize(text), []
+    for s in sentences:
+        s = s.strip()
+        if not s or len(s.split()) < 4: continue
+        if s.startswith(("'", '"', '.', ',', '&')): continue
+        if s.count('.') > 4 or re.search(r'\b(\w+)\s+\1\b', s): continue
+        out.append(s[0].upper() + s[1:])
+    return " ".join(out)
+
+def _t5_summarize(text: str, target_words: int, summarizer) -> str:
+    if len(text.split()) <= target_words:
+        return text.strip()
+    words  = text.split()
+    chunks = [" ".join(words[i:i+400]) for i in range(0, len(words), 400)]
+    chunks = [c for c in chunks if len(c.split()) >= 20]
+    if not chunks: return text.strip()
+    per   = max(50, target_words // len(chunks))
+    parts = []
+    for chunk in chunks:
+        try:
+            raw = summarizer(chunk, max_length=min(int(per*1.4), 512),
+                             min_length=max(30, per), do_sample=False)
+            parts.append(raw[0]["summary_text"])
+        except Exception:
+            parts.append(" ".join(chunk.split()[:per]))
+    combined = _clean_t5(" ".join(parts))
+    result, wc = [], 0
+    for sent in nltk.sent_tokenize(combined):
+        sw = len(sent.split())
+        if wc + sw <= target_words + 25:
+            result.append(sent); wc += sw
+        else:
+            break
+    final = " ".join(result) if result else combined
+    fw = final.split()
+    if len(fw) > target_words + 35:
+        final = " ".join(fw[:target_words+15])
+        dot = final.rfind('.')
+        if dot > len(final) * 0.5: final = final[:dot+1]
+    return final.strip() or combined
+
+def _apply_t5_format(raw: str, fmt: str, username: str) -> str:
+    today = datetime.date.today().strftime("%B %d, %Y")
+    sents = nltk.sent_tokenize(raw)
+    wc    = len(raw.split())
+    out   = f"### Summary ({fmt}) — ~{wc} words\n\n"
+    if fmt == "Bullet Points":
+        out += "#### Core Takeaways\n"
+        for s in sents:
+            s = s.strip()
+            if s: out += f"- {s[0].upper()+s[1:]}\n"
+    elif fmt == "Essay":
+        intro = " ".join(sents[:2]) if len(sents) >= 2 else raw
+        body  = " ".join(sents[2:-2]) if len(sents) > 4 else ""
+        concl = " ".join(sents[-2:]) if len(sents) >= 2 else sents[-1]
+        out  += f"**Introduction:** {intro[0].upper()+intro[1:]}\n\n"
+        if body: out += f"**Core Discussion:** {body[0].upper()+body[1:]}\n\n"
+        out  += f"**Conclusion:** {concl[0].upper()+concl[1:]}"
+    elif fmt == "Letter":
+        out += f"**Date:** {today}  \n**To:** Study Group Peers  \n\nDear Student,\n\n{raw}\n\nBest regards,  \n*{username}*"
+    elif fmt == "Email":
+        out += f"**Subject:** Lecture Summary — {today}  \n---  \nHi Team,\n\n{raw}\n\nThanks,  \n**{username}**"
+    else:
+        out += raw[0].upper() + raw[1:]
+    return out
+
+def get_chat_response(user_query: str, chat_history: list) -> tuple[str, dict]:
+    sia, _, df, vectorizer, tfidf_matrix = load_offline_models()
+    sentiment = sia.polarity_scores(user_query)
+    if _groq_available():
+        messages = [
+            {"role": "system", "content": (
+                "You are StudyPilot's AI tutor for students studying Python, Machine Learning, "
+                "Data Science, DSA, and related CS topics. "
+                "IMPORTANT FORMATTING RULES — always follow these:\n"
+                "- Use **bold** for key terms and important concepts\n"
+                "- Use bullet points (- item) or numbered lists (1. item) when listing multiple things\n"
+                "- Use `inline code` for variable names, functions, and short snippets\n"
+                "- Use ```python\\n...\\n``` code blocks for multi-line code examples\n"
+                "- Use ### headings for major sections when the answer is long\n"
+                "- Add 💡 tip callouts with > 💡 **Tip:** text for key insights\n"
+                "- Separate sections with blank lines for readability\n\n"
+                "RESPONSE LENGTH:\n"
+                "- Simple factual questions: 2-4 sentences with key term bolded\n"
+                "- Moderate questions: structured response with bullets or short code\n"
+                "- Complex questions: full explanation with headings, bullets, code blocks\n"
+                "Never pad. Never over-explain simple questions. Always format cleanly."
+            )},
+        ]
+        for msg in chat_history[-10:]:
+            messages.append({"role": "user" if msg["role"] == "user" else "assistant", "content": msg["text"]})
+        messages.append({"role": "user", "content": user_query})
+        answer, ok = call_groq(messages, max_tokens=1500)
+        if ok:
+            return answer, sentiment
+    answer = _t5_chat_response(user_query, df, vectorizer, tfidf_matrix)
+    return answer, sentiment
+
+def get_summary(text: str, target_words: int, fmt: str, username: str) -> tuple[str, str]:
+    if _groq_available():
+        today = datetime.date.today().strftime("%B %d, %Y")
+        fmt_map = {
+            "Plain Text":   "Write a clear, flowing paragraph summary with no headers.",
+            "Bullet Points":"Format as a markdown bullet list with a '#### Core Takeaways' heading. Each bullet is a complete, informative sentence. Include as many bullets as needed to hit the word count.",
+            "Essay":        "Structure as an essay with **Introduction:**, **Core Discussion:**, and **Conclusion:** sections. Each section should be a substantial paragraph.",
+            "Letter":       f"Format as a letter: start with 'Date: {today}', 'To: Study Group Peers', then 'Dear Student,' paragraph(s), then 'Best regards, *{username}*'",
+            "Email":        f"Format as an email: start with 'Subject: Lecture Summary — {today}', 'Hi Team,' paragraph(s), then 'Thanks, **{username}**'",
+        }
+        prompt = (
+            f"You are an expert academic summariser. Your task is to write a summary of EXACTLY approximately {target_words} words.\n\n"
+            f"FORMAT INSTRUCTION: {fmt_map.get(fmt, fmt_map['Plain Text'])}\n\n"
+            f"STRICT WORD COUNT RULES:\n"
+            f"- Target: {target_words} words\n"
+            f"- Acceptable range: {max(10, target_words - 15)} to {target_words + 15} words\n"
+            f"- Count your words carefully before finalizing\n"
+            f"- If too short, expand with more detail, examples, or explanation from the text\n"
+            f"- If too long, trim without losing key ideas\n"
+            f"- Do NOT add new information not in the text\n"
+            f"- Do NOT start with 'Summary:' or 'Here is a summary'\n\n"
+            f"TEXT TO SUMMARISE:\n\"\"\"\n{text}\n\"\"\"\n\n"
+            f"Write the {target_words}-word summary now:"
+        )
+        raw, ok = call_groq(
+            [{"role": "user", "content": prompt}],
+            max_tokens=max(int(target_words * 3), 512)
+        )
+        if ok:
+            wc = len(raw.split())
+            return f"### Summary ({fmt}) — ~{wc} words\n\n{raw}", "groq"
+    _, summarizer, *_ = load_offline_models()
+    raw = _t5_summarize(text, target_words, summarizer)
+    return _apply_t5_format(raw, fmt, username), "t5"
 
 # ---------------------- DATABASE ----------------------
 DB_FILE = "studypilot.db"
@@ -33,7 +247,6 @@ def get_conn():
     return conn
 
 def init_db():
-    """Create tables if they don't exist. Safe to call on every startup."""
     with get_conn() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -63,53 +276,59 @@ def init_db():
                 data     TEXT NOT NULL DEFAULT '{}'
             )
         """)
-        # Seed default admin account if users table is empty
         existing = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         if existing == 0:
             conn.execute(
                 "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
-                ("admin", "admin@studypilot.com", hash_password("student123"))
+                ("admin", "admin@studypilot.com", hash_password("student123")),
             )
 
 def save_data():
-    """Persist current session state to SQLite."""
     try:
         username = st.session_state.get("username", "")
+        if not username:
+            return
         with get_conn() as conn:
-            # Upsert users
             for uname, meta in st.session_state.get("user_db", {}).items():
                 conn.execute(
                     """INSERT INTO users (username, email, password) VALUES (?, ?, ?)
                        ON CONFLICT(username) DO UPDATE SET
                            email=excluded.email, password=excluded.password""",
-                    (uname, meta["identity"], meta["password"])
+                    (uname, meta["identity"], meta["password"]),
                 )
-            # Upsert chats
             for cid, msgs in st.session_state.get("all_chats", {}).items():
                 conn.execute(
                     """INSERT INTO chats (id, username, messages) VALUES (?, ?, ?)
                        ON CONFLICT(id) DO UPDATE SET messages=excluded.messages""",
-                    (cid, username, json.dumps(msgs, ensure_ascii=False))
+                    (cid, username, json.dumps(msgs, ensure_ascii=False)),
                 )
-            # Upsert summaries
             for sid, data in st.session_state.get("all_summaries", {}).items():
                 conn.execute(
                     """INSERT INTO summaries (id, username, data) VALUES (?, ?, ?)
                        ON CONFLICT(id) DO UPDATE SET data=excluded.data""",
-                    (sid, username, json.dumps(data, ensure_ascii=False))
+                    (sid, username, json.dumps(data, ensure_ascii=False)),
                 )
-            # Upsert plans
             for pid, data in st.session_state.get("all_plans", {}).items():
                 conn.execute(
                     """INSERT INTO plans (id, username, data) VALUES (?, ?, ?)
                        ON CONFLICT(id) DO UPDATE SET data=excluded.data""",
-                    (pid, username, json.dumps(data, ensure_ascii=False))
+                    (pid, username, json.dumps(data, ensure_ascii=False)),
                 )
+    except Exception as e:
+        st.toast(f"⚠️ Save warning: {e}", icon="⚠️")
+
+def save_chat_immediately(chat_id: str, messages: list, username: str):
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                """INSERT INTO chats (id, username, messages) VALUES (?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET messages=excluded.messages""",
+                (chat_id, username, json.dumps(messages, ensure_ascii=False)),
+            )
     except Exception:
-        pass  # Silent fail — prototype behaviour preserved
+        pass
 
 def delete_item_from_db(feature_key, item_id):
-    """Delete a single chat / summary / plan row from the database."""
     table_map = {"chat": "chats", "summary": "summaries", "planner": "plans"}
     table = table_map.get(feature_key)
     if not table:
@@ -121,40 +340,40 @@ def delete_item_from_db(feature_key, item_id):
         pass
 
 def load_data():
-    """Load the logged-in user's data from SQLite into session state."""
     try:
         username = st.session_state.get("username", "")
+        if not username:
+            return
         with get_conn() as conn:
-            # All users (needed for auth checks)
             rows = conn.execute("SELECT username, email, password FROM users").fetchall()
             st.session_state["user_db"] = {
                 r["username"]: {"identity": r["email"], "password": r["password"]}
                 for r in rows
             }
-            # This user's chats
             rows = conn.execute(
                 "SELECT id, messages FROM chats WHERE username=?", (username,)
             ).fetchall()
-            if rows:
-                st.session_state["all_chats"] = {
-                    r["id"]: json.loads(r["messages"]) for r in rows
-                }
-            # This user's summaries
+            st.session_state["all_chats"] = {
+                r["id"]: json.loads(r["messages"]) for r in rows
+            } if rows else {}
             rows = conn.execute(
                 "SELECT id, data FROM summaries WHERE username=?", (username,)
             ).fetchall()
-            if rows:
-                st.session_state["all_summaries"] = {
-                    r["id"]: json.loads(r["data"]) for r in rows
-                }
-            # This user's plans
+            st.session_state["all_summaries"] = {
+                r["id"]: json.loads(r["data"]) for r in rows
+            } if rows else {}
             rows = conn.execute(
                 "SELECT id, data FROM plans WHERE username=?", (username,)
             ).fetchall()
-            if rows:
-                st.session_state["all_plans"] = {
-                    r["id"]: json.loads(r["data"]) for r in rows
-                }
+            st.session_state["all_plans"] = {
+                r["id"]: json.loads(r["data"]) for r in rows
+            } if rows else {}
+            if st.session_state["all_chats"]:
+                st.session_state["active_chat_id"] = list(st.session_state["all_chats"].keys())[0]
+            if st.session_state["all_summaries"]:
+                st.session_state["active_summary_id"] = list(st.session_state["all_summaries"].keys())[0]
+            if st.session_state["all_plans"]:
+                st.session_state["active_planner_id"] = list(st.session_state["all_plans"].keys())[0]
     except Exception:
         pass
 
@@ -196,8 +415,6 @@ def send_otp_email(recipient_email, otp_code):
         return False, str(e)
 
 def hash_password(password):
-    # NOTE: SHA-256 without salt is acceptable for a prototype.
-    # Production should use bcrypt or argon2 via the bcrypt/passlib package.
     return hashlib.sha256(password.encode()).hexdigest()
 
 def validate_email(email):
@@ -207,78 +424,6 @@ def is_otp_expired():
     if not st.session_state.get("otp_timestamp"):
         return True
     return (datetime.datetime.now() - st.session_state["otp_timestamp"]).seconds > 600
-
-# ---------------------- ML RESOURCES ----------------------
-@st.cache_resource
-def load_resources():
-    nltk.download("vader_lexicon", quiet=True)
-    nltk.download("punkt", quiet=True)
-    nltk.download("punkt_tab", quiet=True)
-    sia = SentimentIntensityAnalyzer()
-    summarizer = pipeline("summarization", model="t5-small")
-    return sia, summarizer
-
-sia, summarizer = load_resources()
-
-@st.cache_data
-def prepare_data():
-    try:
-        df = pd.read_csv("chatbot_data.csv")
-    except Exception:
-        data = {
-            "question": ["what is python", "what is ml", "what is dsa", "what is a list"],
-            "answer": [
-                "Python is a high-level interpreted programming language known for its simple readable syntax.",
-                "Machine Learning is a field of AI that enables systems to learn from data automatically.",
-                "DSA stands for Data Structures and Algorithms — the foundation of efficient programming.",
-                "A list is an ordered mutable collection. Example: my_list = [1, 2, 3]"
-            ]
-        }
-        df = pd.DataFrame(data)
-    vectorizer = TfidfVectorizer(ngram_range=(1, 2), stop_words="english")
-    tfidf_matrix = vectorizer.fit_transform(df["question"].values.astype("U"))
-    return df, vectorizer, tfidf_matrix
-
-df, vectorizer, tfidf_matrix = prepare_data()
-
-# ---------------------- SPELL CORRECTION ----------------------
-def correct_spelling(text):
-    """Correct spelling using difflib against known question vocabulary."""
-    all_questions = " ".join(df["question"].values).lower()
-    vocab = list(set(all_questions.split()))
-    words = text.lower().split()
-    corrected = []
-    corrections = {}
-    for word in words:
-        if len(word) <= 2:
-            corrected.append(word)
-            continue
-        matches = difflib.get_close_matches(word, vocab, n=1, cutoff=0.75)
-        if matches and matches[0] != word:
-            corrections[word] = matches[0]
-            corrected.append(matches[0])
-        else:
-            corrected.append(word)
-    return " ".join(corrected), corrections
-
-def get_smart_response(user_query):
-    score = sia.polarity_scores(user_query)
-    corrected_query, corrections = correct_spelling(user_query)
-    user_vec = vectorizer.transform([corrected_query])
-    similarity = cosine_similarity(user_vec, tfidf_matrix)
-    idx = similarity.argmax()
-    spell_note = ""
-    if corrections:
-        fixes = ", ".join([f"'{k}' → '{v}'" for k, v in corrections.items()])
-        spell_note = f"📝 *Spell check: {fixes}*\n\n"
-    if similarity[0][idx] < 0.2:
-        return (
-            spell_note + "I'm not sure about that. Try asking about Python concepts like "
-            "functions, classes, lists, recursion, or sorting algorithms.",
-            score,
-            corrected_query,
-        )
-    return spell_note + df.iloc[idx]["answer"], score, corrected_query
 
 # ---------------------- MOTIVATIONAL ENGINE ----------------------
 MOTIVATIONAL_BANK = {
@@ -305,183 +450,33 @@ MOTIVATIONAL_BANK = {
 
 CHECKIN_MESSAGES = {
     "positive": "You seem to be in great spirits today! Let's channel that energy into a powerful session.",
-    "neutral": "You're in a steady, focused state. Perfect for deep learning.",
+    "neutral":  "You're in a steady, focused state. Perfect for deep learning.",
     "negative": "It sounds like you're having a tough time right now. That's completely okay — we'll build a gentler schedule for you today. You're not alone in this.",
 }
 
 def get_motivational_message(sentiment_score):
-    cat = "positive" if sentiment_score >= 0.1 else ("negative" if sentiment_score <= -0.1 else "neutral")
-    opts = MOTIVATIONAL_BANK[cat]
+    cat   = "positive" if sentiment_score >= 0.1 else ("negative" if sentiment_score <= -0.1 else "neutral")
+    opts  = MOTIVATIONAL_BANK[cat]
     avail = [m for m in opts if st.session_state["message_history"].get(m, 0) < 2] or opts
     chosen = random.choice(avail)
     st.session_state["message_history"][chosen] = st.session_state["message_history"].get(chosen, 0) + 1
     return chosen, cat, CHECKIN_MESSAGES[cat]
 
-# ---------------------- SUMMARIZER ----------------------
-def clean_summary(text):
-    """Clean T5 output: fix spacing, capitalisation, remove garbage sentences."""
-    text = re.sub(r'\s+([.,!?;:])', r'\1', text)
-    text = re.sub(r'#+\s+[^\n]+', '', text)
-    text = text.strip()
-
-    sentences = nltk.sent_tokenize(text)
-    clean = []
-    for s in sentences:
-        s = s.strip()
-        if not s:
-            continue
-        if len(s.split()) < 4:
-            continue
-        if s.startswith(("'", '"', '.', ',', '&')):
-            continue
-        if s.count('.') > 4:
-            continue
-        if re.search(r'\b(\w+)\s+\1\b', s):
-            continue
-        s = s[0].upper() + s[1:]
-        clean.append(s)
-
-    filler_patterns = [
-        r"^(but|however|although|yet)\b.*\b(difficult|achieve|goals|wealth)\b",
-        r"^(it|this) (can|could|may) be (a |an )?(good|bad|difficult)",
-    ]
-    if clean:
-        last = clean[-1].lower()
-        for pat in filler_patterns:
-            if re.search(pat, last):
-                clean = clean[:-1]
-                break
-
-    return " ".join(clean)
-
-def smart_summarize(text, target_words):
-    input_words = len(text.split())
-    if input_words <= target_words:
-        return text.strip()
-
-    words = text.split()
-    chunk_size = 400
-    chunks = [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
-    chunks = [c for c in chunks if len(c.split()) >= 20]
-    if not chunks:
-        return text.strip()
-
-    words_per_chunk = max(50, target_words // len(chunks))
-    max_tok = min(int(words_per_chunk * 1.4), 512)
-    min_tok = max(30, int(words_per_chunk * 1.0))
-
-    all_summaries = []
-    for chunk in chunks:
-        try:
-            raw = summarizer(chunk, max_length=max_tok, min_length=min_tok, do_sample=False)
-            all_summaries.append(raw[0]["summary_text"])
-        except Exception:
-            all_summaries.append(" ".join(chunk.split()[:words_per_chunk]))
-
-    combined = " ".join(all_summaries)
-    combined = clean_summary(combined)
-
-    if len(combined.split()) < target_words:
-        orig_sentences = nltk.sent_tokenize(text)
-        for s in orig_sentences:
-            if len(combined.split()) >= target_words:
-                break
-            if s.strip() not in combined:
-                combined = combined + " " + s.strip()
-
-    sentences = nltk.sent_tokenize(combined)
-    result = []
-    word_count = 0
-    for sent in sentences:
-        sent_words = len(sent.split())
-        if word_count + sent_words <= target_words + 25:
-            result.append(sent)
-            word_count += sent_words
-        else:
-            break
-
-    if word_count < target_words - 20 and not result:
-        result = sentences
-
-    final = " ".join(result) if result else combined
-
-    final_words = final.split()
-    if len(final_words) > target_words + 35:
-        final = " ".join(final_words[:target_words + 15])
-        last_dot = final.rfind('.')
-        if last_dot > len(final) * 0.5:
-            final = final[:last_dot + 1]
-
-    return final.strip() if final.strip() else combined
-
-def apply_summary_formatting(raw_text, fmt):
-    today = datetime.date.today().strftime("%B %d, %Y")
-    sentences = nltk.sent_tokenize(raw_text)
-    wc = len(raw_text.split())
-    out = f"### Summary ({fmt}) — ~{wc} words\n\n"
-
-    if fmt == "Bullet Points":
-        out += "#### Core Takeaways\n"
-        for s in sentences:
-            s = s.strip()
-            if s:
-                s = s[0].upper() + s[1:]
-                out += f"- {s}\n"
-
-    elif fmt == "Essay":
-        intro = " ".join(sentences[:2]) if len(sentences) >= 2 else raw_text
-        body  = " ".join(sentences[2:-2]) if len(sentences) > 4 else ""
-        concl = " ".join(sentences[-2:]) if len(sentences) >= 2 else sentences[-1]
-        intro = intro[0].upper() + intro[1:]
-        out += f"**Introduction:** {intro}\n\n"
-        if body:
-            body = body[0].upper() + body[1:]
-            out += f"**Core Discussion:** {body}\n\n"
-        concl = concl[0].upper() + concl[1:]
-        out += f"**Conclusion:** {concl}"
-
-    elif fmt == "Letter":
-        body = raw_text[0].upper() + raw_text[1:]
-        out += (
-            f"**Date:** {today}  \n"
-            f"**To:** Study Group Peers  \n\n"
-            f"Dear Student,\n\n"
-            f"{body}\n\n"
-            f"Best regards,  \n"
-            f"*{st.session_state['username']}*"
-        )
-
-    elif fmt == "Email":
-        body = raw_text[0].upper() + raw_text[1:]
-        out += (
-            f"**Subject:** Lecture Summary — {today}  \n"
-            f"---  \n"
-            f"Hi Team,\n\n"
-            f"{body}\n\n"
-            f"Thanks,  \n"
-            f"**{st.session_state['username']}**"
-        )
-
-    else:
-        out += raw_text[0].upper() + raw_text[1:]
-
-    return out
-
 # ---------------------- SIDEBAR ----------------------
 def render_sidebar_section(feature_key, friendly_name):
     if feature_key == "chat":
         history_dict = st.session_state["all_chats"]
-        active_id = st.session_state["active_chat_id"]
+        active_id    = st.session_state["active_chat_id"]
     elif feature_key == "summary":
         history_dict = st.session_state["all_summaries"]
-        active_id = st.session_state["active_summary_id"]
+        active_id    = st.session_state["active_summary_id"]
     else:
         history_dict = st.session_state["all_plans"]
-        active_id = st.session_state["active_planner_id"]
+        active_id    = st.session_state["active_planner_id"]
 
     st.markdown(
-        f"<p style='font-weight:700;font-size:0.85rem;color:#64748B;text-transform:uppercase;"
-        f"letter-spacing:0.08em;margin:0 0 8px 0;'>{friendly_name} History</p>",
+        f"<p style='font-weight:700;font-size:0.8rem;color:#64748B;text-transform:uppercase;"
+        f"letter-spacing:0.08em;margin:0 0 6px 0;'>{friendly_name} History</p>",
         unsafe_allow_html=True,
     )
 
@@ -490,6 +485,7 @@ def render_sidebar_section(feature_key, friendly_name):
         if feature_key == "chat":
             st.session_state["all_chats"][nid] = []
             st.session_state["active_chat_id"] = nid
+            save_chat_immediately(nid, [], st.session_state["username"])
         elif feature_key == "summary":
             st.session_state["all_summaries"][nid] = {
                 "text": "", "summary": "", "word_count": 80,
@@ -502,6 +498,7 @@ def render_sidebar_section(feature_key, friendly_name):
                 "schedule": [], "title": "Untitled Plan",
             }
             st.session_state["active_planner_id"] = nid
+        save_data()
         st.rerun()
 
     st.write("")
@@ -510,19 +507,23 @@ def render_sidebar_section(feature_key, friendly_name):
         st.caption("No history yet.")
         return
 
+    open_menu = st.session_state.get("active_menu_item_id", "")
+
     for item_id in list(history_dict.keys()):
         if feature_key == "chat":
-            msgs = history_dict[item_id]
-            label = msgs[0]["text"][:22] + "..." if msgs else "New Chat"
+            msgs  = history_dict[item_id]
+            label = msgs[0]["text"][:22] + "…" if msgs else "New Chat"
         else:
-            label = history_dict[item_id].get("title", "Untitled")
+            label = history_dict[item_id].get("title", "Untitled")[:22]
 
         is_active = item_id == active_id
-        col_sel, col_dot = st.columns([8.5, 1.5])
+        is_open   = open_menu == item_id
+
+        col_sel, col_dot = st.columns([8, 2])
 
         with col_sel:
-            btn_lbl = f"▸ {label}" if is_active else label
-            if st.button(btn_lbl, key=f"sel_{item_id}_{feature_key}", use_container_width=True):
+            prefix = "▸ " if is_active else ""
+            if st.button(f"{prefix}{label}", key=f"sel_{item_id}_{feature_key}", use_container_width=True):
                 if feature_key == "chat":
                     st.session_state["active_chat_id"] = item_id
                 elif feature_key == "summary":
@@ -533,47 +534,46 @@ def render_sidebar_section(feature_key, friendly_name):
 
         with col_dot:
             if st.button("⋮", key=f"dots_{item_id}_{feature_key}", use_container_width=True):
-                cur = st.session_state.get("active_menu_item_id", "")
-                st.session_state["active_menu_item_id"] = item_id if cur != item_id else ""
+                st.session_state["active_menu_item_id"] = item_id if not is_open else ""
                 st.rerun()
 
-        if st.session_state.get("active_menu_item_id", "") == item_id:
+        if is_open:
             st.markdown(
-                """<div style='background:#161D2E;border:1px solid #2D3748;border-radius:10px;
-                padding:4px 0;margin:2px 0 6px 0;box-shadow:0 4px 20px rgba(0,0,0,0.6);overflow:hidden;'>""",
+                """<div style='
+                    background:#1C2333;
+                    border:1px solid #2D3748;
+                    border-radius:8px;
+                    padding:3px 4px;
+                    margin:-4px 0 4px 0;
+                    box-shadow:0 6px 18px rgba(0,0,0,0.6);
+                '></div>""",
                 unsafe_allow_html=True,
             )
-            if st.button("↗  Share", key=f"share_{item_id}_{feature_key}", use_container_width=True):
-                st.toast("Link copied!")
-                st.session_state["active_menu_item_id"] = ""
-                st.rerun()
-            if st.button("✏️  Rename", key=f"ren_{item_id}_{feature_key}", use_container_width=True):
-                st.session_state["editing_item_id"] = item_id
-                st.session_state["rename_feature_target"] = feature_key
-                st.session_state["active_menu_item_id"] = ""
-                st.rerun()
-            st.markdown("<div style='height:1px;background:#2D3748;margin:2px 8px;'></div>", unsafe_allow_html=True)
-            if st.button("🗑️  Delete", key=f"del_{item_id}_{feature_key}", use_container_width=True):
-                del history_dict[item_id]
-                delete_item_from_db(feature_key, item_id)
-                st.session_state["active_menu_item_id"] = ""
-                if active_id == item_id:
-                    remaining = list(history_dict.keys())
-                    fallback = remaining[0] if remaining else ""
-                    if feature_key == "chat":
-                        st.session_state["active_chat_id"] = fallback
-                    elif feature_key == "summary":
-                        st.session_state["active_summary_id"] = fallback
-                    else:
-                        st.session_state["active_planner_id"] = fallback
-                st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
+            dc1, dc2 = st.columns(2)
+            with dc1:
+                if st.button("✏️ Rename", key=f"ren_{item_id}_{feature_key}", use_container_width=True):
+                    st.session_state["editing_item_id"]       = item_id
+                    st.session_state["rename_feature_target"] = feature_key
+                    st.session_state["active_menu_item_id"]   = ""
+                    st.rerun()
+            with dc2:
+                if st.button("🗑️ Delete", key=f"del_{item_id}_{feature_key}", use_container_width=True):
+                    del history_dict[item_id]
+                    delete_item_from_db(feature_key, item_id)
+                    st.session_state["active_menu_item_id"] = ""
+                    if active_id == item_id:
+                        remaining = list(history_dict.keys())
+                        fallback  = remaining[0] if remaining else ""
+                        if feature_key == "chat":      st.session_state["active_chat_id"]    = fallback
+                        elif feature_key == "summary": st.session_state["active_summary_id"] = fallback
+                        else:                          st.session_state["active_planner_id"]  = fallback
+                    st.rerun()
 
     eid = st.session_state.get("editing_item_id", "")
     if eid in history_dict and st.session_state.get("rename_feature_target") == feature_key:
-        st.write("---")
+        st.write("")
         with st.form(f"rename_form_{feature_key}"):
-            new_title = st.text_input("New name", placeholder="Enter title...", label_visibility="collapsed")
+            new_title = st.text_input("New name", placeholder="Enter title…", label_visibility="collapsed")
             if st.form_submit_button("Save →", use_container_width=True):
                 if new_title.strip():
                     if feature_key == "chat":
@@ -588,6 +588,7 @@ def render_sidebar_section(feature_key, friendly_name):
                     st.session_state["editing_item_id"] = ""
                     st.rerun()
 
+
 # ---------------------- MAIN APP ----------------------
 def render_main_app():
     with st.sidebar:
@@ -596,7 +597,7 @@ def render_main_app():
             st.rerun()
 
         if st.session_state.get("show_profile_tray", False):
-            uid = st.session_state["username"]
+            uid   = st.session_state["username"]
             email = st.session_state["user_db"].get(uid, {}).get("identity", "N/A")
             st.markdown(
                 f"""<div style='background:#0D1117;border:1px solid #1E2533;border-radius:10px;
@@ -622,19 +623,21 @@ def render_main_app():
 
         st.write("")
         if st.button("🚪  Log Out", use_container_width=True, key="logout_btn"):
-            st.session_state["logged_in"] = False
-            st.session_state["username"] = ""
-            st.session_state["auth_view"] = "welcome"
-            st.session_state["current_view"] = "welcome_hub"
-            # Clear user-specific data from session on logout
-            st.session_state["all_chats"] = {}
-            st.session_state["all_summaries"] = {}
-            st.session_state["all_plans"] = {}
-            st.session_state["active_chat_id"] = ""
-            st.session_state["active_summary_id"] = ""
-            st.session_state["active_planner_id"] = ""
+            save_data()
+            st.session_state["logged_in"]         = False
+            st.session_state["username"]           = ""
+            st.session_state["auth_view"]          = "welcome"
+            st.session_state["current_view"]       = "welcome_hub"
+            st.session_state["all_chats"]          = {}
+            st.session_state["all_summaries"]      = {}
+            st.session_state["all_plans"]          = {}
+            st.session_state["active_chat_id"]     = ""
+            st.session_state["active_summary_id"]  = ""
+            st.session_state["active_planner_id"]  = ""
+            st.session_state["nav_history_stack"]  = []
             st.rerun()
 
+    # ── Navigation helper ──────────────────────────────────────────────────────
     # NAVBAR
     st.markdown("<div class='navbar-wrapper'>", unsafe_allow_html=True)
     n1, n2, n3, n4 = st.columns([1, 1.2, 1.2, 1.2])
@@ -658,9 +661,9 @@ def render_main_app():
 
     tab_pos = {
         "welcome_hub": ("22%", "0%"),
-        "chat": ("25%", "24%"),
-        "summary": ("25%", "50%"),
-        "planner": ("25%", "75%"),
+        "chat":        ("25%", "24%"),
+        "summary":     ("25%", "50%"),
+        "planner":     ("25%", "75%"),
     }
     w, ml = tab_pos.get(st.session_state["current_view"], ("22%", "0%"))
     st.markdown(
@@ -669,7 +672,7 @@ def render_main_app():
         unsafe_allow_html=True,
     )
 
-    # HOME
+    # ── HOME ──────────────────────────────────────────────────────────────────
     if st.session_state["current_view"] == "welcome_hub":
         st.markdown(
             f"<h2 style='margin-bottom:4px;'>Welcome back, {st.session_state['username']}! 👋</h2>",
@@ -680,23 +683,30 @@ def render_main_app():
             unsafe_allow_html=True,
         )
 
-    # CHATBOT
+    # ── CHATBOT ───────────────────────────────────────────────────────────────
     elif st.session_state["current_view"] == "chat":
         st.markdown("### 💬 Ask your Technical Questions")
+
         if not st.session_state["all_chats"]:
-            st.session_state["all_chats"]["chat_default"] = []
-            st.session_state["active_chat_id"] = "chat_default"
+            default_id = f"chat_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            st.session_state["all_chats"][default_id] = []
+            st.session_state["active_chat_id"] = default_id
+            save_chat_immediately(default_id, [], st.session_state["username"])
         elif not st.session_state["active_chat_id"]:
             st.session_state["active_chat_id"] = list(st.session_state["all_chats"].keys())[0]
 
-        active_chat = st.session_state["all_chats"].get(st.session_state["active_chat_id"], [])
+        active_chat_id = st.session_state["active_chat_id"]
+        active_chat = st.session_state["all_chats"].get(active_chat_id, [])
 
         for idx, msg in enumerate(active_chat):
-            msg_id = f"msg_{st.session_state['active_chat_id']}_{idx}"
+            msg_id = f"msg_{active_chat_id}_{idx}"
             if msg["role"] == "user":
                 _, cb, cd = st.columns([3.5, 6, 0.5])
                 with cb:
-                    st.markdown(f"<div class='chat-msg user-bubble'>{msg['text']}</div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div class='chat-msg user-bubble'>{msg['text']}</div>",
+                        unsafe_allow_html=True,
+                    )
                 with cd:
                     if st.button("⋮", key=f"dots_chat_{msg_id}"):
                         st.session_state["active_bubble_menu_id"] = (
@@ -706,7 +716,10 @@ def render_main_app():
             else:
                 cb, cd, _ = st.columns([6, 0.5, 3.5])
                 with cb:
-                    st.markdown(f"<div class='chat-msg bot-bubble'>{msg['text']}</div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div class='chat-msg bot-bubble'>{msg['text']}</div>",
+                        unsafe_allow_html=True,
+                    )
                 with cd:
                     if st.button("⋮", key=f"dots_chat_{msg_id}"):
                         st.session_state["active_bubble_menu_id"] = (
@@ -716,17 +729,11 @@ def render_main_app():
 
             if st.session_state.get("active_bubble_menu_id") == msg_id:
                 if msg["role"] == "user":
-                    _, mc, _ = st.columns([3.5, 2.2, 4.3])
+                    _, mc = st.columns([7.5, 2.5])
                 else:
-                    mc_col, _, _ = st.columns([2.2, 4.3, 3.5])
-                    mc = mc_col
+                    mc, _ = st.columns([2.5, 7.5])
                 with mc:
-                    st.markdown(
-                        """<div style='background:#161D2E;border:1px solid #2D3748;border-radius:8px;
-                        padding:2px 0;box-shadow:0 4px 16px rgba(0,0,0,0.5);overflow:hidden;'>""",
-                        unsafe_allow_html=True,
-                    )
-                    if st.button("📋 Copy", key=f"cp_{msg_id}", use_container_width=True):
+                    if st.button("📋  Copy", key=f"cp_{msg_id}", use_container_width=True):
                         try:
                             pyperclip.copy(msg["text"])
                         except Exception:
@@ -734,44 +741,48 @@ def render_main_app():
                         st.toast("Copied! ✅")
                         st.session_state["active_bubble_menu_id"] = ""
                         st.rerun()
-                    if st.button("↗ Share", key=f"sh_{msg_id}", use_container_width=True):
+                    if st.button("↗  Share", key=f"sh_{msg_id}", use_container_width=True):
                         st.toast("Link copied!")
                         st.session_state["active_bubble_menu_id"] = ""
                         st.rerun()
-                    st.markdown("</div>", unsafe_allow_html=True)
 
         st.write("")
         with st.form("chat_form", clear_on_submit=True):
             chat_input = st.text_input(
-                "", placeholder="e.g. What is recursion in Python?", label_visibility="collapsed"
+                "", placeholder="Ask anything about Python, ML, DSA…", label_visibility="collapsed"
             )
             send = st.form_submit_button("Send →", use_container_width=True)
 
         if send and chat_input.strip():
-            ans, sentiment, corrected = get_smart_response(chat_input)
+            with st.spinner("Thinking..."):
+                ans, sentiment = get_chat_response(chat_input, active_chat)
+
             if sentiment["compound"] >= 0.05:
                 st.toast("Positive vibes! 😊")
             elif sentiment["compound"] <= -0.05:
                 st.toast("You seem stressed. Take it easy! 💙")
-            active_chat.append({"role": "user", "text": chat_input})
+
+            active_chat.append({"role": "user",      "text": chat_input})
             active_chat.append({"role": "assistant", "text": ans})
-            st.session_state["all_chats"][st.session_state["active_chat_id"]] = active_chat
-            save_data()
+            st.session_state["all_chats"][active_chat_id] = active_chat
+            save_chat_immediately(active_chat_id, active_chat, st.session_state["username"])
             st.rerun()
 
-    # SUMMARIZER
+    # ── SUMMARIZER ────────────────────────────────────────────────────────────
     elif st.session_state["current_view"] == "summary":
         st.markdown("### 📝 Notes Summarizer")
+
         if not st.session_state["all_summaries"]:
             st.session_state["all_summaries"]["summary_default"] = {
                 "text": "", "summary": "", "word_count": 80,
                 "format_style": "Plain Text", "title": "Untitled Summary",
             }
             st.session_state["active_summary_id"] = "summary_default"
+            save_data()
         elif not st.session_state["active_summary_id"]:
             st.session_state["active_summary_id"] = list(st.session_state["all_summaries"].keys())[0]
 
-        node = st.session_state["all_summaries"].get(st.session_state["active_summary_id"])
+        node     = st.session_state["all_summaries"].get(st.session_state["active_summary_id"])
         raw_text = st.text_area(
             "", value=node["text"], height=220,
             placeholder="Paste your lecture notes here...", label_visibility="collapsed",
@@ -782,7 +793,7 @@ def render_main_app():
         cc, cf = st.columns(2)
         with cc:
             target_words = st.number_input(
-                "Target word count:", min_value=10, max_value=500,
+                "Target word count:", min_value=10, max_value=1000,
                 value=int(node.get("word_count", 80)), step=10,
             )
         with cf:
@@ -792,19 +803,21 @@ def render_main_app():
                 index=fmt_options.index(node.get("format_style", "Plain Text")),
             )
 
-        node["text"] = raw_text
-        node["word_count"] = target_words
+        node["text"]         = raw_text
+        node["word_count"]   = target_words
         node["format_style"] = fmt
 
         if st.button("✨  Generate Summary", use_container_width=True, key="gen_sum_btn"):
             if len(raw_text.strip()) < 20:
                 st.warning("Please paste more text first.")
             else:
-                with st.spinner(f"Generating ~{target_words} word summary..."):
-                    summary_text = smart_summarize(raw_text, target_words)
-                    formatted = apply_summary_formatting(summary_text, fmt)
-                    node["summary"] = formatted
-                    node["raw_summary"] = summary_text
+                with st.spinner(f"Generating ~{target_words} word {fmt} summary..."):
+                    formatted, engine = get_summary(
+                        raw_text, target_words, fmt, st.session_state["username"]
+                    )
+                    node["summary"]     = formatted
+                    node["raw_summary"] = formatted
+                    node["engine"]      = engine
                     if node["title"].startswith("Untitled"):
                         node["title"] = raw_text[:18] + "..."
                     st.session_state["all_summaries"][st.session_state["active_summary_id"]] = node
@@ -823,13 +836,8 @@ def render_main_app():
                     )
                     st.rerun()
             if st.session_state.get("active_bubble_menu_id") == "sum_menu":
-                _, mc, _ = st.columns([6, 3, 1])
+                _, mc = st.columns([7, 3])
                 with mc:
-                    st.markdown(
-                        """<div style='background:#1A2234;border:1px solid #2D3748;border-radius:12px;
-                        padding:6px;box-shadow:0 8px 24px rgba(0,0,0,0.6);'>""",
-                        unsafe_allow_html=True,
-                    )
                     if st.button("📋  Copy", key="cp_sum", use_container_width=True):
                         st.session_state["show_copy_summary"] = True
                         st.session_state["active_bubble_menu_id"] = ""
@@ -838,7 +846,6 @@ def render_main_app():
                         st.toast("Link copied!")
                         st.session_state["active_bubble_menu_id"] = ""
                         st.rerun()
-                    st.markdown("</div>", unsafe_allow_html=True)
 
             if st.session_state.get("show_copy_summary", False):
                 st.code(node.get("raw_summary", node["summary"]), language="text")
@@ -846,7 +853,7 @@ def render_main_app():
                     st.session_state["show_copy_summary"] = False
                     st.rerun()
 
-    # PLANNER
+    # ── PLANNER ───────────────────────────────────────────────────────────────
     elif st.session_state["current_view"] == "planner":
         st.markdown("### 📅 Adaptive Study Planner")
         st.caption("Your schedule adapts based on how you feel — because your wellbeing matters as much as your grades.")
@@ -856,6 +863,7 @@ def render_main_app():
                 "subjects": "", "weak": "", "mood": "", "schedule": [], "title": "Untitled Plan",
             }
             st.session_state["active_planner_id"] = "planner_default"
+            save_data()
         elif not st.session_state["active_planner_id"]:
             st.session_state["active_planner_id"] = list(st.session_state["all_plans"].keys())[0]
 
@@ -864,17 +872,17 @@ def render_main_app():
         with st.form("planner_form"):
             c1, c2 = st.columns(2)
             with c1:
-                subj = st.text_input("Subjects (comma separated):", value=plan["subjects"],
-                                     placeholder="e.g. Python, ML, DSA")
+                subj       = st.text_input("Subjects (comma separated):", value=plan["subjects"],
+                                           placeholder="e.g. Python, ML, DSA")
                 start_time = st.time_input("Start Time:", datetime.time(9, 0))
             with c2:
-                weak = st.text_input("Your Weak Subject:", value=plan["weak"],
-                                     placeholder="e.g. Python")
+                weak     = st.text_input("Your Weak Subject:", value=plan["weak"],
+                                         placeholder="e.g. Python")
                 end_time = st.time_input("End Time:", datetime.time(12, 0))
 
             mood = st.text_input("How are you feeling right now?", value=plan["mood"],
                                  placeholder="e.g. tired, stressed, excited, motivated, anxious...")
-            gen = st.form_submit_button("🗓️  Generate My Schedule", use_container_width=True)
+            gen  = st.form_submit_button("🗓️  Generate My Schedule", use_container_width=True)
 
         if gen:
             slist = [s.strip() for s in subj.split(",") if s.strip()]
@@ -883,14 +891,15 @@ def render_main_app():
             elif end_time <= start_time:
                 st.error("End time must be after start time.")
             else:
+                sia        = get_sia()
                 mood_score = sia.polarity_scores(mood)["compound"]
                 boost, mood_cat, checkin = get_motivational_message(mood_score)
                 plan.update({"subjects": subj, "weak": weak, "mood": mood})
                 if plan["title"].startswith("Untitled") and slist:
                     plan["title"] = f"Plan: {slist[0]}"
 
-                start_dt = datetime.datetime.combine(datetime.date.today(), start_time)
-                end_dt   = datetime.datetime.combine(datetime.date.today(), end_time)
+                start_dt      = datetime.datetime.combine(datetime.date.today(), start_time)
+                end_dt        = datetime.datetime.combine(datetime.date.today(), end_time)
                 total_minutes = int((end_dt - start_dt).total_seconds() / 60)
 
                 if mood_score <= -0.3:
@@ -906,48 +915,42 @@ def render_main_app():
                     if s.lower() == weak.strip().lower():
                         weighted.append(s)
 
-                schedule = []
-                t = start_dt
-                i = session_num = 0
-                session_num = 1
+                schedule, t, i, session_num = [], start_dt, 0, 1
                 while t < end_dt:
                     remaining = int((end_dt - t).total_seconds() / 60)
                     if remaining < work_mins:
                         break
-                    sub = weighted[i % len(weighted)]
-                    actual_work = min(work_mins, remaining)
-                    end_session = t + datetime.timedelta(minutes=actual_work)
+                    sub          = weighted[i % len(weighted)]
+                    actual_work  = min(work_mins, remaining)
+                    end_session  = t + datetime.timedelta(minutes=actual_work)
                     actual_break = min(break_mins, int((end_dt - end_session).total_seconds() / 60))
-                    resume_at = end_session + datetime.timedelta(minutes=actual_break)
+                    resume_at    = end_session + datetime.timedelta(minutes=actual_break)
                     schedule.append({
-                        "session": session_num,
-                        "start": t.strftime("%I:%M %p"),
-                        "end": end_session.strftime("%I:%M %p"),
-                        "subject": sub,
-                        "is_weak": sub.lower() == weak.strip().lower(),
+                        "session":  session_num,
+                        "start":    t.strftime("%I:%M %p"),
+                        "end":      end_session.strftime("%I:%M %p"),
+                        "subject":  sub,
+                        "is_weak":  sub.lower() == weak.strip().lower(),
                         "break_len": actual_break,
-                        "resume": resume_at.strftime("%I:%M %p"),
-                        "mode": mode,
+                        "resume":   resume_at.strftime("%I:%M %p"),
+                        "mode":     mode,
                     })
                     t = resume_at
                     i += 1
                     session_num += 1
 
-                plan["schedule"] = schedule
-                plan["boost"] = boost
-                plan["checkin"] = checkin
-                plan["mood_cat"] = mood_cat
-                plan["mode"] = mode
-                plan["total_minutes"] = total_minutes
+                plan.update({
+                    "schedule": schedule, "boost": boost, "checkin": checkin,
+                    "mood_cat": mood_cat, "mode": mode, "total_minutes": total_minutes,
+                })
                 st.session_state["all_plans"][st.session_state["active_planner_id"]] = plan
                 save_data()
                 st.rerun()
 
         if plan.get("schedule"):
             st.write("---")
-
-            mood_cat = plan.get("mood_cat", "neutral")
-            checkin  = plan.get("checkin", "")
+            mood_cat       = plan.get("mood_cat", "neutral")
+            checkin        = plan.get("checkin", "")
             checkin_colors = {"positive": "#064E3B", "neutral": "#1E3A5F", "negative": "#3B1F1F"}
             checkin_border = {"positive": "#34D399", "neutral": "#60A5FA", "negative": "#F87171"}
             checkin_icon   = {"positive": "🌟", "neutral": "🎯", "negative": "💙"}
@@ -960,12 +963,11 @@ def render_main_app():
             </div>""",
                 unsafe_allow_html=True,
             )
-
             st.markdown(
                 f"""<div style='background:#0D1117;border:1px solid #1E2533;border-left:4px solid #F59E0B;
                 border-radius:12px;padding:1rem 1.25rem;margin-bottom:1rem;'>
                 <span style='color:#F59E0B;font-weight:700;'>✨ Your Motivation</span>
-                <p style='color:#CBD5E1;margin:6px 0 0;font-size:0.95rem;font-style:italic;">"{plan['boost']}"</p>
+                <p style='color:#CBD5E1;margin:6px 0 0;font-size:0.95rem;font-style:italic;'>"{plan['boost']}"</p>
             </div>""",
                 unsafe_allow_html=True,
             )
@@ -1016,7 +1018,6 @@ def render_main_app():
                     f"<td style='padding:10px 12px;color:#9CA3AF;font-size:0.88rem;'>☕ {s['break_len']} min → {s['resume']}</td>"
                     f"</tr>"
                 )
-
             st.markdown(
                 f"""<div style='overflow-x:auto;border-radius:12px;border:1px solid #1E2533;margin-top:0.5rem;'>
                 <table style='width:100%;border-collapse:collapse;font-family:inherit;'>
@@ -1048,6 +1049,7 @@ def render_main_app():
                     unsafe_allow_html=True,
                 )
 
+
 # ---------------------- AUTH ----------------------
 def render_login_page():
     _, col, _ = st.columns([1, 1.8, 1])
@@ -1069,17 +1071,16 @@ def render_login_page():
             st.write("")
             if st.button("📝  Create Account", use_container_width=True):
                 st.session_state["auth_view"] = "register"
-                st.session_state["reg_step"] = "input_email"
+                st.session_state["reg_step"]  = "input_email"
                 st.rerun()
 
         elif st.session_state["auth_view"] == "login":
             st.markdown("### Sign In")
             with st.form("login_form"):
-                u = st.text_input("Username")
-                p = st.text_input("Password", type="password")
+                u   = st.text_input("Username")
+                p   = st.text_input("Password", type="password")
                 sub = st.form_submit_button("Sign In →", use_container_width=True)
             if sub:
-                # Re-load users from DB before checking (handles multi-instance)
                 try:
                     with get_conn() as conn:
                         row = conn.execute(
@@ -1087,7 +1088,7 @@ def render_login_page():
                         ).fetchone()
                     if row and row["password"] == hash_password(p.strip()):
                         st.session_state["logged_in"] = True
-                        st.session_state["username"] = u.strip()
+                        st.session_state["username"]  = u.strip()
                         load_data()
                         st.rerun()
                     else:
@@ -1101,7 +1102,7 @@ def render_login_page():
                     st.rerun()
             with cr:
                 if st.button("Forgot Password?", key="forgot_btn", use_container_width=True):
-                    st.session_state["auth_view"] = "forgot_password"
+                    st.session_state["auth_view"]   = "forgot_password"
                     st.session_state["forgot_step"] = "verify_email"
                     st.rerun()
 
@@ -1109,25 +1110,30 @@ def render_login_page():
             st.markdown("### Create Account")
             if st.session_state["reg_step"] == "input_email":
                 with st.form("reg_email_form"):
-                    ei = st.text_input("Your Email Address", placeholder="name@gmail.com")
+                    ei   = st.text_input("Your Email Address", placeholder="name@gmail.com")
                     send = st.form_submit_button("Send Verification Code →", use_container_width=True)
                 if send:
                     if not validate_email(ei.strip()):
                         st.error("❌ Enter a valid email.")
                     else:
-                        otp = str(random.randint(100000, 999999))
-                        ok, err = send_otp_email(ei.strip(), otp)
-                        if ok:
-                            st.session_state.update({
-                                "generated_otp": otp,
-                                "otp_timestamp": datetime.datetime.now(),
-                                "temp_identity": ei.strip(),
-                                "reg_step": "verify_otp",
-                            })
-                            st.success(f"✅ OTP sent to {ei.strip()}!")
-                            st.rerun()
+                        # ── ONE ACCOUNT PER EMAIL CHECK ──
+                        existing_emails = [m["identity"] for m in st.session_state["user_db"].values()]
+                        if ei.strip() in existing_emails:
+                            st.error("❌ An account with this email already exists. Please sign in instead.")
                         else:
-                            st.error(f"❌ Failed: {err}")
+                            otp = str(random.randint(100000, 999999))
+                            ok, err = send_otp_email(ei.strip(), otp)
+                            if ok:
+                                st.session_state.update({
+                                    "generated_otp": otp,
+                                    "otp_timestamp": datetime.datetime.now(),
+                                    "temp_identity": ei.strip(),
+                                    "reg_step":      "verify_otp",
+                                })
+                                st.success(f"✅ OTP sent to {ei.strip()}!")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ Failed: {err}")
                 if st.button("⬅ Cancel", use_container_width=True):
                     st.session_state["auth_view"] = "welcome"
                     st.rerun()
@@ -1149,7 +1155,7 @@ def render_login_page():
                 else:
                     with st.form("otp_form"):
                         entered = st.text_input("Enter 6-Digit OTP", max_chars=6, placeholder="______")
-                        verify = st.form_submit_button("Verify →", use_container_width=True)
+                        verify  = st.form_submit_button("Verify →", use_container_width=True)
                     if verify:
                         if entered.strip() == st.session_state["generated_otp"]:
                             st.session_state["reg_step"] = "set_credentials"
@@ -1163,15 +1169,18 @@ def render_login_page():
             elif st.session_state["reg_step"] == "set_credentials":
                 st.success(f"✅ Email verified: {st.session_state['temp_identity']}")
                 with st.form("cred_form"):
-                    ru = st.text_input("Choose a Username")
-                    rp = st.text_input("Choose a Password", type="password")
-                    rc = st.text_input("Confirm Password", type="password")
+                    ru   = st.text_input("Choose a Username")
+                    rp   = st.text_input("Choose a Password", type="password")
+                    rc   = st.text_input("Confirm Password", type="password")
                     done = st.form_submit_button("Create Account →", use_container_width=True)
                 if done:
+                    existing_emails = [m["identity"] for m in st.session_state["user_db"].values()]
                     if len(ru.strip()) < 3:
                         st.error("❌ Username too short.")
                     elif ru.strip() in st.session_state["user_db"]:
                         st.error("❌ Username taken.")
+                    elif st.session_state["temp_identity"] in existing_emails:
+                        st.error("❌ An account with this email already exists. Please sign in instead.")
                     elif rp != rc:
                         st.error("❌ Passwords don't match.")
                     elif len(rp) < 4:
@@ -1182,7 +1191,6 @@ def render_login_page():
                             "password": hash_password(rp.strip()),
                         }
                         st.session_state["user_db"][ru.strip()] = new_user
-                        # Persist immediately to DB
                         try:
                             with get_conn() as conn:
                                 conn.execute(
@@ -1192,7 +1200,7 @@ def render_login_page():
                         except Exception:
                             pass
                         st.session_state["logged_in"] = True
-                        st.session_state["username"] = ru.strip()
+                        st.session_state["username"]  = ru.strip()
                         load_data()
                         st.rerun()
 
@@ -1201,7 +1209,7 @@ def render_login_page():
             if st.session_state["forgot_step"] == "verify_email":
                 with st.form("forgot_form"):
                     re_email = st.text_input("Registered Email")
-                    lookup = st.form_submit_button("Send Reset OTP →", use_container_width=True)
+                    lookup   = st.form_submit_button("Send Reset OTP →", use_container_width=True)
                 if lookup:
                     found = next(
                         (u for u, m in st.session_state["user_db"].items() if m["identity"] == re_email.strip()),
@@ -1213,9 +1221,9 @@ def render_login_page():
                         if ok:
                             st.session_state.update({
                                 "recovery_target_user": found,
-                                "generated_otp": otp,
-                                "otp_timestamp": datetime.datetime.now(),
-                                "forgot_step": "verify_otp",
+                                "generated_otp":        otp,
+                                "otp_timestamp":        datetime.datetime.now(),
+                                "forgot_step":          "verify_otp",
                             })
                             st.success("✅ OTP sent!")
                             st.rerun()
@@ -1244,8 +1252,8 @@ def render_login_page():
 
             elif st.session_state["forgot_step"] == "reset_password":
                 with st.form("reset_form"):
-                    np1 = st.text_input("New Password", type="password")
-                    np2 = st.text_input("Confirm", type="password")
+                    np1  = st.text_input("New Password", type="password")
+                    np2  = st.text_input("Confirm", type="password")
                     save = st.form_submit_button("Update Password →", use_container_width=True)
                 if save:
                     if np1 != np2:
@@ -1253,7 +1261,7 @@ def render_login_page():
                     elif len(np1) < 4:
                         st.error("❌ Too short.")
                     else:
-                        target = st.session_state["recovery_target_user"]
+                        target   = st.session_state["recovery_target_user"]
                         new_hash = hash_password(np1.strip())
                         st.session_state["user_db"][target]["password"] = new_hash
                         try:
@@ -1268,15 +1276,11 @@ def render_login_page():
                         st.session_state["auth_view"] = "login"
                         st.rerun()
 
+
 # ---------------------- ENTRY POINT ----------------------
 st.set_page_config(page_title="StudyPilot", page_icon="✈️", layout="wide")
 
-# Initialise DB on every cold start (idempotent)
 init_db()
-
-if "app_theme" not in st.session_state:
-    st.session_state["app_theme"] = "dark"
-
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap');
 
@@ -1302,80 +1306,147 @@ section[data-testid="stSidebar"] > div:first-child { padding-top:1rem !important
     border:1px solid #1E2533 !important; border-radius:10px !important;
 }
 
-.chat-msg { padding:0.85rem 1.25rem; border-radius:16px; font-size:0.95rem; line-height:1.5; word-wrap:break-word !important; }
-.user-bubble { background:linear-gradient(135deg,#1D4ED8,#2563EB) !important; color:#fff !important; border-bottom-right-radius:2px !important; }
-.bot-bubble { background:#0D1117 !important; color:#E2E8F0 !important; border-bottom-left-radius:2px !important; border:1px solid #1E2533; }
+.chat-msg {
+    padding:0.85rem 1.25rem;
+    border-radius:16px;
+    font-size:0.95rem;
+    line-height:1.6;
+    word-wrap:break-word !important;
+    overflow-wrap:break-word !important;
+}
+.user-bubble {
+    background:linear-gradient(135deg,#1D4ED8,#2563EB) !important;
+    color:#fff !important;
+    border-bottom-right-radius:2px !important;
+}
+.bot-bubble {
+    background:#0D1117 !important;
+    color:#E2E8F0 !important;
+    border-bottom-left-radius:2px !important;
+    border:1px solid #1E2533 !important;
+}
+.bot-bubble p  { color:#E2E8F0 !important; margin:0.3rem 0 !important; }
+.bot-bubble strong { color:#93C5FD !important; font-weight:700 !important; }
+.bot-bubble em { color:#C4B5FD !important; }
+.bot-bubble h1,.bot-bubble h2,.bot-bubble h3,.bot-bubble h4 { color:#60A5FA !important; margin:0.5rem 0 0.2rem !important; }
+.bot-bubble ul, .bot-bubble ol { padding-left:1.3rem !important; margin:0.3rem 0 !important; }
+.bot-bubble li { color:#E2E8F0 !important; margin:0.2rem 0 !important; }
+.bot-bubble code { background:#1E2533 !important; color:#34D399 !important; padding:1px 5px !important; border-radius:4px !important; font-size:0.88em !important; }
+.bot-bubble pre { background:#0A0F1A !important; border:1px solid #1E2533 !important; border-radius:8px !important; padding:0.6rem 1rem !important; overflow-x:auto !important; margin:0.4rem 0 !important; }
+.bot-bubble pre code { background:transparent !important; color:#86EFAC !important; padding:0 !important; }
+.bot-bubble blockquote { border-left:3px solid #3B82F6 !important; background:#111827 !important; padding:0.4rem 0.8rem !important; border-radius:0 6px 6px 0 !important; margin:0.4rem 0 !important; color:#93C5FD !important; }
 
 .navbar-wrapper { padding:0.2rem; margin-bottom:0.5rem; }
 .navbar-wrapper button { background:#0D1117 !important; border:1px solid #1E2533 !important; color:#94A3B8 !important; font-weight:600 !important; }
 .navbar-wrapper button:hover { background:#1E2533 !important; color:#F1F5F9 !important; }
 
-.stButton>button { background:#0D1117 !important; color:#CBD5E1 !important; border-radius:10px !important; border:1px solid #1E2533 !important; font-weight:600 !important; height:2.6em !important; transition:all 0.15s !important; }
+.stButton>button {
+    background:#0D1117 !important; color:#CBD5E1 !important;
+    border-radius:10px !important; border:1px solid #1E2533 !important;
+    font-weight:600 !important; height:2.4em !important;
+    transition:all 0.15s !important;
+}
 .stButton>button:hover { background:#2563EB !important; color:#fff !important; border-color:#2563EB !important; }
+
+button[key="nav_back"] {
+    background:#0D1117 !important;
+    border:1px solid #1E2533 !important;
+    color:#60A5FA !important;
+    font-weight:700 !important;
+    font-size:0.9rem !important;
+    border-radius:10px !important;
+}
+button[key="nav_back"]:hover {
+    background:#1E2533 !important;
+    color:#93C5FD !important;
+    border-color:#3B82F6 !important;
+}
 
 button[key="profile_btn"] { color:#60A5FA !important; font-weight:700 !important; text-align:left !important; }
 button[key="logout_btn"] { color:#F87171 !important; border-color:#3B1F1F !important; background:#1A0F0F !important; }
 button[key="logout_btn"]:hover { background:#DC2626 !important; color:#fff !important; border-color:#DC2626 !important; }
 
-button[key^="dots_"] { background:transparent !important; color:#475569 !important; border:none !important; font-size:1.4rem !important; height:auto !important; padding:0 !important; box-shadow:none !important; }
-button[key^="dots_"]:hover { color:#F1F5F9 !important; }
-button[key^="sel_"] { background:#0D1117 !important; text-align:left !important; justify-content:flex-start !important; color:#CBD5E1 !important; font-size:0.88rem !important; }
+button[key^="sel_"] {
+    background:transparent !important;
+    border:none !important;
+    color:#CBD5E1 !important;
+    font-size:0.82rem !important;
+    font-weight:400 !important;
+    height:2em !important;
+    min-height:0 !important;
+    padding:4px 8px !important;
+    text-align:left !important;
+    justify-content:flex-start !important;
+    box-shadow:none !important;
+    border-radius:7px !important;
+}
+button[key^="sel_"]:hover { background:#1E2533 !important; color:#F1F5F9 !important; }
 
-button[key^="share_"], button[key^="ren_"], button[key^="cp_"], button[key^="sh_"], button[key^="close_"] {
-    background:transparent !important; border:none !important; color:#CBD5E1 !important;
-    font-size:0.8rem !important; height:1.9em !important; border-radius:6px !important;
-    text-align:left !important; justify-content:flex-start !important; font-weight:500 !important;
-    padding:0 10px !important; box-shadow:none !important;
+button[key^="dots_"] {
+    background:transparent !important; color:#475569 !important;
+    border:none !important; font-size:1.1rem !important;
+    height:2em !important; padding:0 4px !important;
+    box-shadow:none !important; min-height:0 !important;
 }
-button[key^="share_"]:hover, button[key^="ren_"]:hover, button[key^="cp_"]:hover, button[key^="sh_"]:hover {
-    background:#1E2D45 !important; color:#fff !important;
+button[key^="dots_"]:hover { color:#94A3B8 !important; background:#1E2533 !important; border-radius:5px !important; }
+
+button[key^="ren_"] {
+    background:#1C2333 !important; border:1px solid #2D3748 !important;
+    color:#CBD5E1 !important; font-size:0.75rem !important;
+    height:1.6em !important; min-height:0 !important;
+    border-radius:6px !important; font-weight:500 !important;
+    padding:0 6px !important; box-shadow:none !important;
 }
+button[key^="ren_"]:hover { background:#1E2D45 !important; color:#60A5FA !important; border-color:#3B82F6 !important; }
+
 button[key^="del_"] {
-    background:transparent !important; border:none !important; color:#F87171 !important;
-    font-size:0.8rem !important; height:1.9em !important; border-radius:6px !important;
-    text-align:left !important; justify-content:flex-start !important; font-weight:500 !important;
-    padding:0 10px !important; box-shadow:none !important;
+    background:#1C2333 !important; border:1px solid #2D3748 !important;
+    color:#F87171 !important; font-size:0.75rem !important;
+    height:1.6em !important; min-height:0 !important;
+    border-radius:6px !important; font-weight:500 !important;
+    padding:0 6px !important; box-shadow:none !important;
 }
-button[key^="del_"]:hover { background:#3B1F1F !important; color:#FCA5A5 !important; }
-button[key^="new_"] { background:#0F1E38 !important; color:#60A5FA !important; border:1px dashed #3B82F6 !important; font-weight:700 !important; }
-button[key^="new_"]:hover { background:#2563EB !important; color:#fff !important; border-color:#2563EB !important; }
+button[key^="del_"]:hover { background:#3B1F1F !important; color:#FCA5A5 !important; border-color:#7F1D1D !important; }
+
+button[key^="cp_"], button[key^="sh_"] {
+    background:#1C2333 !important; border:1px solid #2D3748 !important;
+    color:#CBD5E1 !important; font-size:0.8rem !important;
+    height:1.8em !important; min-height:0 !important;
+    border-radius:6px !important; font-weight:500 !important;
+    padding:0 10px !important; box-shadow:0 4px 16px rgba(0,0,0,0.5) !important;
+    margin-bottom:2px !important;
+}
+button[key^="cp_"]:hover, button[key^="sh_"]:hover { background:#2563EB !important; color:#fff !important; border-color:#2563EB !important; }
+
+button[key^="new_"] {
+    background:#0F1E38 !important; color:#60A5FA !important;
+    border:1px dashed #3B82F6 !important; font-weight:700 !important;
+    font-size:0.82rem !important; height:2em !important;
+}
+button[key^="new_"]:hover { background:#2563EB !important; color:#fff !important; border-color:#2563EB !important; border-style:solid !important; }
 
 [data-testid="stForm"] { border:none !important; background:transparent !important; padding:0 !important; }
 .stAlert { border-radius:10px !important; }
 </style>""", unsafe_allow_html=True)
 
 defaults = {
-    "logged_in": False,
-    "username": "",
-    "message_history": {},
-    "show_profile_tray": False,
-    "active_menu_item_id": "",
-    "active_bubble_menu_id": "",
-    "current_view": "welcome_hub",
-    "auth_view": "welcome",
-    "reg_step": "input_email",
-    "forgot_step": "verify_email",
-    "generated_otp": None,
-    "otp_timestamp": None,
-    "temp_identity": "",
-    "recovery_target_user": "",
-    "editing_item_id": "",
-    "rename_feature_target": "",
-    "show_copy_summary": False,
-    # user_db is seeded from DB; this is just a safe default for first render
-    "user_db": {},
-    "all_chats": {},
-    "active_chat_id": "",
-    "all_summaries": {},
-    "active_summary_id": "",
-    "all_plans": {},
-    "active_planner_id": "",
+    "logged_in": False, "username": "", "message_history": {},
+    "show_profile_tray": False, "active_menu_item_id": "", "active_bubble_menu_id": "",
+    "current_view": "welcome_hub", "auth_view": "welcome",
+    "reg_step": "input_email", "forgot_step": "verify_email",
+    "generated_otp": None, "otp_timestamp": None,
+    "temp_identity": "", "recovery_target_user": "",
+    "editing_item_id": "", "rename_feature_target": "",
+    "show_copy_summary": False, "user_db": {},
+    "all_chats": {}, "active_chat_id": "",
+    "all_summaries": {}, "active_summary_id": "",
+    "all_plans": {}, "active_planner_id": "",
+    "nav_history_stack": [],
 }
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# Load all users from DB into session state on first render (for auth checks)
 if "users_loaded" not in st.session_state:
     try:
         with get_conn() as conn:
