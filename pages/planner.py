@@ -22,7 +22,7 @@ def render_planner_view():
 
     plan = st.session_state["all_plans"].get(st.session_state["active_planner_id"])
 
-    st.markdown("<div class='content-card'>", unsafe_allow_html=True)
+
     with st.form("planner_form"):
         c1, c2 = st.columns(2)
         with c1:
@@ -34,7 +34,7 @@ def render_planner_view():
         mood = st.text_input("How are you feeling right now?", value=plan["mood"],
                              placeholder="e.g. tired, stressed, excited…")
         gen  = st.form_submit_button("Generate My Schedule", use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+
 
     if gen:
         try:

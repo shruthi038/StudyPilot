@@ -32,10 +32,13 @@ def inject_css(theme="light"):
     /* Fixed nav toggle button positioning */
     .main [data-testid="stHorizontalBlock"]:first-of-type [data-testid="column"]:first-child button {{
         position: fixed !important;
-        top: 12px !important;
+        top: 34px !important;
         left: {toggle_left} !important;
         z-index: 9999 !important;
         transition: left 0.28s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        background-color: var(--bg-secondary) !important;
+        color: var(--text-primary) !important;
+        border: 1px solid var(--border) !important;
     }}
     </style>""", unsafe_allow_html=True)
 

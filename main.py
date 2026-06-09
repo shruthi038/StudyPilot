@@ -57,7 +57,7 @@ def render_app_shell():
 # ENTRY POINT
 # ============================================================
 
-st.set_page_config(page_title="StudyPilot", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="StudyPilot", page_icon="assets/logo_light.png", layout="wide")
 
 init_db()
 

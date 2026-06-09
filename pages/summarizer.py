@@ -23,7 +23,7 @@ def render_summary_view():
 
     node = st.session_state["all_summaries"].get(st.session_state["active_summary_id"])
 
-    st.markdown("<div class='content-card'>", unsafe_allow_html=True)
+
     st.markdown("<p class='card-label'>📄 Input Text</p>", unsafe_allow_html=True)
     raw_text = st.text_area(
         "", value=node["text"], height=200,
@@ -32,7 +32,7 @@ def render_summary_view():
     )
     if raw_text.strip():
         st.caption(f"📄 {len(raw_text.split())} words")
-    st.markdown("</div>", unsafe_allow_html=True)
+
 
     cc, cf = st.columns(2)
     with cc:
@@ -67,7 +67,7 @@ def render_summary_view():
                 st.rerun()
 
     if node["summary"]:
-        st.markdown("<div class='content-card' style='margin-top:1.5rem;'>", unsafe_allow_html=True)
+
         st.markdown("<p class='card-label'>📝 Generated Summary</p>", unsafe_allow_html=True)
         st.markdown(node["summary"])
         c_copy, _ = st.columns([1, 3])
@@ -79,4 +79,4 @@ def render_summary_view():
             if st.button("✕ Close", key="close_copy_sum"):
                 st.session_state["show_copy_summary"] = False
                 st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
+

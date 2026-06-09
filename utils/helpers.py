@@ -7,8 +7,20 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from utils.constants import GMAIL_ADDRESS, GMAIL_APP_PASSWORD
 
+import base64
+import os
+
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
+
+@st.cache_data
+def get_base64_logo(theme="light"):
+    logo_filename = "logo_light.png" if theme == "light" else "logo_dark.png"
+    logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", logo_filename)
+    if os.path.exists(logo_path):
+        with open(logo_path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    return ""
 
 def validate_email(email):
     return bool(re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email))
@@ -33,7 +45,7 @@ def send_otp_email(recipient_email, otp_code):
                 <tr><td align="center">
                     <table width="480" cellpadding="0" cellspacing="0" style="background:#111827;border-radius:16px;overflow:hidden;border:1px solid #1F2937;">
                         <tr><td style="background:linear-gradient(135deg,#1D4ED8,#2563EB);padding:32px;text-align:center;">
-                            <h1 style="margin:0;color:#fff;font-size:26px;font-weight:800;">✈️ StudyPilot</h1>
+                            <h1 style="margin:0;color:#fff;font-size:26px;font-weight:800;">StudyPilot</h1>
                             <p style="margin:6px 0 0;color:#BFDBFE;font-size:13px;">Your Learning Assistant</p>
                         </td></tr>
                         <tr><td style="padding:36px 40px;">

@@ -12,8 +12,8 @@ def render_home_view():
 
         st.markdown(
             f"<div class='home-welcome'>"
-            f"<h1 class='home-greeting'>{greeting}, {uname} 👋</h1>"
-            f"<p class='home-subtext'>Ready to study today?</p>"
+            f"<h1 class='home-greeting'>Welcome back, {uname}.</h1>"
+            f"<p class='home-subtext'>Here is your learning overview for today.</p>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -39,17 +39,26 @@ def render_home_view():
 
     else:
         # ── Unauthenticated hero ──
+        from utils.helpers import get_base64_logo
+        theme = st.session_state.get("theme", "light")
+        logo_b64 = get_base64_logo(theme)
+        img_html = f"<img src='data:image/png;base64,{logo_b64}' style='height: 2.4rem; margin-right: 0.6rem; vertical-align: middle;'>" if logo_b64 else ""
+
         st.markdown(
-            """<div class='hero-section'>
-                <div class='hero-badge'>✦ AI-Powered Learning</div>
+            f"""<div class='hero-section'>
+                <div style='text-align: center; margin-bottom: 1.2rem; display: flex; align-items: center; justify-content: center;'>
+                    {img_html}
+                    <span style='font-size: 2.2rem; font-weight: 900; background: linear-gradient(135deg, #4F46E5, #7C3AED); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>StudyPilot</span>
+                </div>
+                <div class='hero-badge'>✦ Student Learning Assistant </div>
                 <h1 class='hero-title'>Learn Faster.<br>Remember More.</h1>
-                <p class='hero-sub'>AI tutoring, intelligent summarization, and adaptive study planning in one seamless experience.</p>
+                <p class='hero-sub'> Tutoring, intelligent summarization, and adaptive study planning in one seamless experience.</p>
             </div>""",
             unsafe_allow_html=True,
         )
-        _, cb1, cb2, _ = st.columns([2, 1.5, 1.2, 2])
+        _, cb1, cb2, _ = st.columns([2.5, 1.5, 1.5, 2.5])
         with cb1:
-            if st.button("Start Learning Free →", key="hero_cta", use_container_width=True, type="primary"):
+            if st.button("Start Learning Free", key="hero_cta", use_container_width=True, type="primary"):
                 st.session_state["page"]      = "register"
                 st.session_state["auth_view"] = "register"
                 st.session_state["reg_step"]  = "input_email"
@@ -65,13 +74,13 @@ def render_home_view():
         recent = []
         for cid, msgs in list(st.session_state["all_chats"].items())[:3]:
             label = msgs[0]["text"][:40] + "…" if msgs else "Untitled Chat"
-            recent.append(("💬", label, cid, "chat", "active_chat_id"))
+            recent.append(("", label, cid, "chat", "active_chat_id"))
         for sid, data in list(st.session_state["all_summaries"].items())[:2]:
             label = data.get("title", "Untitled")[:40]
-            recent.append(("📝", label, sid, "summary", "active_summary_id"))
+            recent.append(("", label, sid, "summary", "active_summary_id"))
         for pid, data in list(st.session_state["all_plans"].items())[:2]:
             label = data.get("title", "Untitled Plan")[:40]
-            recent.append(("📅", label, pid, "planner", "active_planner_id"))
+            recent.append(("", label, pid, "planner", "active_planner_id"))
 
         if recent:
             st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)

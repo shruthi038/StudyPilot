@@ -5,12 +5,6 @@ from services.chatbot import get_chat_response
 from database.database import save_chat_immediately
 
 def render_chat_view():
-    st.markdown(
-        "<h2 class='view-title'>💬 AI Tutor</h2>"
-        "<p class='view-subtitle'>Get instant help with programming, ML, DSA, and more</p>",
-        unsafe_allow_html=True,
-    )
-
     if not st.session_state["all_chats"]:
         default_id = f"chat_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         st.session_state["all_chats"][default_id] = []
@@ -37,9 +31,13 @@ def render_chat_view():
 
     # ── Empty state with suggestion chips ──
     if not active_chat:
+        from utils.helpers import get_base64_logo
+        theme = st.session_state.get("theme", "light")
+        logo_b64 = get_base64_logo(theme)
+        img_html = f"<img src='data:image/png;base64,{logo_b64}' style='height: 64px; margin-bottom: 1rem; opacity: 0.9;'>" if logo_b64 else ""
         st.markdown(
-            """<div class='chat-empty'>
-                <div style='font-size:3.5rem;margin-bottom:1rem;opacity:0.8;'>✈️</div>
+            f"""<div class='chat-empty'>
+                <div style='text-align:center;'>{img_html}</div>
                 <h3 class='chat-empty-title'>What would you like to learn?</h3>
                 <p class='chat-empty-sub'>Pick a suggestion or type your own question below</p>
             </div>""",
@@ -69,21 +67,16 @@ def render_chat_view():
                     unsafe_allow_html=True,
                 )
             else:
-                st.markdown(
-                    f"<div class='chat-row bot-row'>"
-                    f"<div class='bot-avatar'>🤖</div>"
-                    f"<div class='chat-msg bot-bubble'>{msg['text']}</div>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-                _, _, cc = st.columns([7, 2, 1])
-                with cc:
-                    if st.button("📋", key=f"cp_{msg_id}", help="Copy"):
-                        try:
-                            pyperclip.copy(msg["text"])
-                        except Exception:
-                            pass
-                        st.toast("Copied! ✅")
+                with st.chat_message("assistant"):
+                    st.markdown(msg['text'])
+                    _, _, cc = st.columns([7, 2, 1])
+                    with cc:
+                        if st.button("📋", key=f"cp_{msg_id}", help="Copy"):
+                            try:
+                                pyperclip.copy(msg["text"])
+                            except Exception:
+                                pass
+                            st.toast("Copied! ✅")
 
     # ── Input form ──
     st.markdown("<div style='margin-top:1.5rem;'></div>", unsafe_allow_html=True)

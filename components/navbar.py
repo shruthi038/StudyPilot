@@ -5,8 +5,8 @@ def render_navbar():
     """Sticky top navbar: ☰ + logo | Features popover | auth/profile."""
     is_logged_in = st.session_state["logged_in"]
 
-    # Three flush sections: toggle+logo | features | auth
-    c_toggle, c_logo, c_feat, c_auth = st.columns([0.5, 2.0, 2.0, 3.0])
+    # Three flush sections: toggle+logo | spacer | features | auth
+    c_toggle, c_logo, c_spacer, c_feat, c_auth = st.columns([0.8, 1.5, 5.3, 1.5, 2.0])
 
     # ── Toggle ──
     with c_toggle:
@@ -17,16 +17,19 @@ def render_navbar():
 
     # ── Logo ──
     with c_logo:
-        if st.button("✈️  StudyPilot", key="nav_logo"):
+        if st.button("StudyPilot", key="nav_logo"):
             st.session_state["current_view"] = "home"
             st.session_state["page"]         = "landing"
             st.rerun()
+
+    with c_spacer:
+        st.empty()
 
     # ── Features popover (center) ──
     with c_feat:
         with st.popover("Features  ▾", use_container_width=True):
             feature_list = [
-                ("💬", "AI Tutor",        "chat"),
+                ("💬", "Tutor",           "chat"),
                 ("📝", "Smart Summarizer", "summary"),
                 ("📅", "Adaptive Planner", "planner"),
             ]
@@ -42,7 +45,7 @@ def render_navbar():
     with c_auth:
         if is_logged_in:
             uname = st.session_state["username"]
-            with st.popover(f"👤  {uname}", use_container_width=True):
+            with st.popover(f"{uname}", use_container_width=True):
                 if st.button("Profile",  key="nav_profile",  use_container_width=True):
                     st.session_state["current_view"] = "profile"
                     st.rerun()
@@ -55,12 +58,12 @@ def render_navbar():
         else:
             cl, cr = st.columns(2)
             with cl:
-                if st.button("Login", key="nav_login", use_container_width=True):
+                if st.button("Login", key="nav_login", type="primary", use_container_width=True):
                     st.session_state["page"]      = "login"
                     st.session_state["auth_view"] = "login"
                     st.rerun()
             with cr:
-                if st.button("Get Started", key="nav_register", type="primary", use_container_width=True):
+                if st.button("Sign Up", key="nav_register", type="primary", use_container_width=True):
                     st.session_state["page"]      = "register"
                     st.session_state["auth_view"] = "register"
                     st.session_state["reg_step"]  = "input_email"

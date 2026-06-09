@@ -92,7 +92,7 @@ def get_chat_response(user_query: str, chat_history: list) -> tuple[str, dict]:
     if _groq_available():
         messages = [
             {"role": "system", "content": (
-                "You are StudyPilot's AI tutor for students studying Python, Machine Learning, "
+                "You are StudyPilot's tutor for students studying Python, Machine Learning, "
                 "Data Science, DSA, and related CS topics. "
                 "IMPORTANT FORMATTING RULES — always follow these:\n"
                 "- Use **bold** for key terms and important concepts\n"

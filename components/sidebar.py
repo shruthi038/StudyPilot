@@ -17,11 +17,15 @@ def render_sidebar():
 
 def _render_global_sidebar():
     """Sidebar for Home, Analytics, Activity, Profile, Settings."""
+    from utils.helpers import get_base64_logo
+    theme = st.session_state.get("theme", "light")
+    logo_b64 = get_base64_logo(theme)
+    img_html = f"<img src='data:image/png;base64,{logo_b64}' style='height: 32px; margin-right: 12px; vertical-align: middle;'>" if logo_b64 else ""
 
     # ── Logo ──
     st.markdown(
-        "<div class='sb-logo'>✈️ <span>StudyPilot</span></div>"
-        "<div class='sb-tagline'>AI Learning Companion</div>",
+        f"<div class='sb-logo' style='display:flex; align-items:center;'>{img_html}<span>StudyPilot</span></div>"
+        "<div class='sb-tagline'> </div>",
         unsafe_allow_html=True,
     )
     st.markdown("<div class='sb-divider'></div>", unsafe_allow_html=True)
@@ -48,7 +52,7 @@ def _render_global_sidebar():
 
     nav_items = [
         ("Home",             "home"),
-        ("AI Tutor",         "chat"),
+        ("Tutor",            "chat"),
         ("Smart Summarizer", "summary"),
         ("Adaptive Planner", "planner"),
         ("Analytics",        "analytics"),
@@ -107,17 +111,17 @@ def _render_feature_sidebar():
     """Sidebar for AI Tutor / Summarizer / Planner — shows feature history only."""
     view = st.session_state["current_view"]
 
-    # ── Compact profile ──
-    if st.session_state["logged_in"]:
-        uname   = st.session_state["username"]
-        initial = uname[0].upper()
-        st.markdown(
-            f"""<div class='sb-profile-compact'>
-                <div class='sb-avatar-sm'>{initial}</div>
-                <div class='sb-uname'>{uname}</div>
-            </div>""",
-            unsafe_allow_html=True,
-        )
+    from utils.helpers import get_base64_logo
+    theme = st.session_state.get("theme", "light")
+    logo_b64 = get_base64_logo(theme)
+    img_html = f"<img src='data:image/png;base64,{logo_b64}' style='height: 32px; margin-right: 12px; vertical-align: middle;'>" if logo_b64 else ""
+
+    # ── Logo ──
+    st.markdown(
+        f"<div class='sb-logo' style='display:flex; align-items:center;'>{img_html}<span>StudyPilot</span></div>"
+        "<div class='sb-tagline'> </div>",
+        unsafe_allow_html=True,
+    )
 
     # ── Back to Home ──
     if st.button("← Home", key="sib_back_home", use_container_width=True):

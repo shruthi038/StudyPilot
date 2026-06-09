@@ -78,7 +78,7 @@ def render_activity_view():
             """<div class='empty-state'>
                 <div style='font-size:3rem;margin-bottom:1rem;'>📂</div>
                 <h3 style='font-weight:700;color:var(--text-primary);'>No activity yet</h3>
-                <p style='color:var(--text-muted);'>Start using AI Tutor, Summarizer, or Planner to build your history.</p>
+                <p style='color:var(--text-muted);'>Start using Tutor, Summarizer, or Planner to build your history.</p>
             </div>""",
             unsafe_allow_html=True,
         )
