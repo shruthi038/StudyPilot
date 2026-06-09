@@ -1,0 +1,549 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400&display=swap');
+
+/* ── Reset Streamlit chrome ── */
+#MainMenu, footer, header,
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+[data-testid="collapsedControl"],
+.viewerBadge_container__1QSob { display:none !important; }
+
+/* ── Global ── */
+* { font-family: 'Inter', -apple-system, sans-serif !important; }
+.stApp { background: var(--bg-primary) !important; color: var(--text-primary) !important; }
+
+/* ── Sidebar ── */
+section[data-testid="stSidebar"] {
+    background: var(--sidebar-bg) !important;
+    border-right: 1px solid var(--sidebar-border) !important;
+    width: 260px !important;
+    min-width: 260px !important;
+    transition: transform 0.28s cubic-bezier(0.4,0,0.2,1) !important;
+}
+section[data-testid="stSidebar"] > div:first-child {
+    padding: 0 1rem 1.2rem 1rem !important;
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: 100vh !important;
+    overflow: hidden auto !important;
+}
+section[data-testid="stSidebar"] > div:first-child > div:first-child {
+    padding-top: 0px !important;
+    overflow: hidden !important;
+}
+/* Suppress collapse button and any stray elements before the main content in sidebar */
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"],
+section[data-testid="stSidebar"] [data-testid="collapsedControl"] {
+    display: none !important;
+}
+section[data-testid="stSidebar"] > div:first-child > div:first-child:not(:has(.sb-logo)) {
+    display: none !important;
+}
+section[data-testid="stSidebar"] .stMarkdown:first-of-type > div > p:empty {
+    display: none !important;
+}
+
+/* Sidebar logo */
+.sb-logo {
+    font-size: 1.2rem; font-weight: 800;
+    color: var(--text-primary);
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 2px;
+}
+.sb-logo span { background: var(--accent-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.sb-tagline { font-size: 0.72rem; color: var(--text-muted); margin-bottom: 0; }
+
+/* Sidebar divider */
+.sb-divider {
+    border: none; border-top: 1px solid var(--border);
+    margin: 0.8rem 0;
+}
+
+/* Sidebar profile */
+.sb-profile {
+    display: flex; align-items: center; gap: 10px; padding: 8px 0;
+}
+.sb-profile-compact {
+    display: flex; align-items: center; gap: 8px; padding: 6px 0; margin-bottom: 6px;
+}
+.sb-avatar {
+    width: 38px; height: 38px; border-radius: 50%;
+    background: var(--accent-gradient);
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-size: 1rem; font-weight: 800; flex-shrink: 0;
+}
+.sb-avatar-sm {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--accent-gradient);
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-size: 0.8rem; font-weight: 800; flex-shrink: 0;
+}
+.sb-avatar-lg {
+    width: 56px; height: 56px; border-radius: 50%;
+    background: var(--accent-gradient);
+    color: #fff; display: flex; align-items: center; justify-content: center;
+    font-size: 1.5rem; font-weight: 800; flex-shrink: 0;
+}
+.sb-uname { font-size: 0.88rem; font-weight: 700; color: var(--text-primary); }
+.sb-email { font-size: 0.75rem; color: var(--text-muted); }
+
+/* Sidebar section label */
+.sb-section-label {
+    font-size: 0.7rem; font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.08em;
+    margin: 0 0 6px 0;
+    padding: 0;
+}
+
+/* Sidebar buttons */
+section[data-testid="stSidebar"] .stButton > button {
+    background: transparent !important;
+    border: none !important;
+    color: var(--text-secondary) !important;
+    text-align: left !important;
+    justify-content: flex-start !important;
+    font-weight: 600 !important;
+    font-size: 0.88rem !important;
+    height: 38px !important;
+    border-radius: var(--radius-sm) !important;
+    padding: 0 10px !important;
+    margin-bottom: 2px !important;
+    box-shadow: none !important;
+    transition: all 0.15s ease !important;
+}
+section[data-testid="stSidebar"] .stButton > button:hover {
+    background: var(--accent-light) !important;
+    color: var(--text-primary) !important;
+}
+
+/* Active nav item */
+.nav-item-active {
+    background: var(--accent-light);
+    color: var(--accent) !important;
+    font-weight: 700;
+    font-size: 0.88rem;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    border-left: 3px solid var(--accent);
+    margin-bottom: 2px;
+}
+
+/* History panel inside sidebar */
+.sb-empty {
+    text-align: center; color: var(--text-muted);
+    font-size: 0.8rem; padding: 1.5rem 0.5rem;
+}
+
+/* Sidebar spacer (pushes logout to bottom) */
+.sb-spacer { flex-grow: 1 !important; }
+
+/* Pinned logout styling */
+section[data-testid="stSidebar"] button[kind="secondary"][key*="logout"],
+section[data-testid="stSidebar"] .stButton > button[data-testid*="logout"] {
+    color: #F87171 !important;
+    font-weight: 600 !important;
+}
+section[data-testid="stSidebar"] .stButton > button[data-testid*="logout"]:hover {
+    background: rgba(239,68,68,0.1) !important;
+    color: #F87171 !important;
+}
+
+/* History list items in sidebar */
+section[data-testid="stSidebar"] .stButton > button[key^="sel_"],
+section[data-testid="stSidebar"] .stButton > button[key^="sib_back"] {
+    font-size: 0.82rem !important; height: 32px !important;
+}
+section[data-testid="stSidebar"] .stButton > button[key^="dots_"] {
+    font-size: 1rem !important; height: 32px !important;
+    padding: 0 4px !important; width: 28px !important;
+}
+section[data-testid="stSidebar"] .stButton > button[key^="new_"] {
+    color: var(--accent) !important;
+    border: 1px dashed var(--accent) !important;
+    font-weight: 700 !important;
+    font-size: 0.82rem !important;
+    margin-bottom: 8px !important;
+}
+section[data-testid="stSidebar"] .stButton > button[key^="new_"]:hover {
+    background: var(--accent) !important;
+    color: #fff !important;
+    border-style: solid !important;
+}
+section[data-testid="stSidebar"] .stButton > button[key^="ren_"],
+section[data-testid="stSidebar"] .stButton > button[key^="del_"] {
+    font-size: 0.75rem !important; height: 26px !important;
+}
+
+/* ── Navbar ── */
+.navbar-divider {
+    border: none; border-top: 1px solid var(--border);
+    margin: 0.4rem 0 1.2rem 0;
+}
+
+/* Suppress the extra top padding Streamlit adds before first element */
+div.stApp, [data-testid="stApp"], .block-container, .main .block-container { padding-top: 0 !important; margin-top: 0 !important; }
+[data-testid="stAppViewContainer"] > section > div:first-child, .main > div:first-child { padding-top: 0 !important; }
+[data-testid="stMain"] > div, .main > div { padding-top: 0 !important; }
+[data-testid="stMain"], .main { padding-top: 0 !important; margin-top: 0 !important; }
+header, [data-testid="stHeader"] { display: none !important; height: 0px !important; padding-top: 0 !important; margin-top: 0 !important; }
+
+/* Remove vertical gap Streamlit puts above columns and align flush */
+[data-testid="stHorizontalBlock"] {
+    align-items: center !important;
+    gap: 0.5rem !important;
+    margin-top: 0px !important;
+    padding-top: 0px !important;
+}
+
+/* Logo button in navbar */
+.stButton > button[key="nav_logo"] {
+    background: transparent !important;
+    border: none !important;
+    font-weight: 800 !important;
+    font-size: 1.05rem !important;
+    color: var(--text-primary) !important;
+    padding: 0 4px !important;
+    box-shadow: none !important;
+    height: 38px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+.stButton > button[key="nav_logo"]:hover {
+    color: var(--accent) !important;
+    background: transparent !important;
+}
+
+/* Toggle button */
+.main [data-testid="stHorizontalBlock"]:first-of-type [data-testid="column"]:first-child button {
+    background: var(--bg-secondary) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-primary) !important;
+    width: 38px !important; height: 38px !important;
+    border-radius: var(--radius-sm) !important;
+    font-size: 1rem !important; padding: 0 !important;
+    box-shadow: none !important;
+    flex-shrink: 0 !important;
+}
+.main [data-testid="stHorizontalBlock"]:first-of-type [data-testid="column"]:first-child button:hover {
+    border-color: var(--accent) !important;
+    color: var(--accent) !important;
+}
+
+/* Popover trigger buttons — suppress expand_more overflow */
+[data-testid="stPopover"] > button {
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+    height: 38px !important;
+    display: flex !important;
+    align-items: center !important;
+}
+[data-testid="stPopover"] > button > span[data-testid="stMarkdownContainer"] {
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+}
+/* Hide the expand_more icon/text inside popover button */
+[data-testid="stPopover"] button > div > div:last-child {
+    display: none !important;
+}
+[data-testid="stPopover"] button > div > div:first-child {
+    width: 100% !important;
+}
+/* Hide the expand_more icon that Streamlit appends to popovers */
+[data-testid="stPopover"] > button > span:last-child:not([data-testid="stMarkdownContainer"]) {
+    display: none !important;
+}
+
+/* ── Global buttons ── */
+.stButton > button {
+    background: var(--bg-secondary) !important;
+    color: var(--text-secondary) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-sm) !important;
+    font-weight: 600 !important;
+    height: 38px !important;
+    font-size: 0.88rem !important;
+    transition: all 0.15s ease !important;
+    box-shadow: none !important;
+}
+.stButton > button:hover {
+    background: var(--accent) !important;
+    color: #fff !important;
+    border-color: var(--accent) !important;
+}
+.stButton > button[kind="primary"] {
+    background: var(--accent-gradient) !important;
+    color: #fff !important; border: none !important;
+    box-shadow: 0 2px 8px rgba(79,70,229,0.25) !important;
+}
+.stButton > button[kind="primary"]:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 4px 16px rgba(79,70,229,0.35) !important;
+}
+
+/* Form submit */
+[data-testid="stFormSubmitButton"] button {
+    background: var(--accent-gradient) !important;
+    color: #fff !important; border: none !important;
+    border-radius: var(--radius-md) !important;
+    height: 42px !important; font-weight: 700 !important;
+    box-shadow: 0 2px 8px rgba(79,70,229,0.2) !important;
+}
+[data-testid="stFormSubmitButton"] button:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 4px 16px rgba(79,70,229,0.3) !important;
+}
+
+/* Form inputs */
+.stTextInput > div > div > input,
+.stTextArea > div > div > textarea,
+.stSelectbox > div > div,
+.stNumberInput > div > div > input {
+    background: var(--bg-secondary) !important;
+    color: var(--text-primary) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-sm) !important;
+}
+.stTextInput > div > div > input:focus,
+.stTextArea > div > div > textarea:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 2px var(--accent-light) !important;
+}
+[data-testid="stForm"] { border: none !important; background: transparent !important; padding: 0 !important; }
+.stAlert { border-radius: var(--radius-sm) !important; }
+
+/* ── Typography ── */
+.view-title {
+    font-weight: 800; font-size: 1.6rem;
+    color: var(--text-primary); margin: 0 0 4px 0; letter-spacing: -0.5px;
+}
+.view-subtitle {
+    color: var(--text-muted); font-size: 0.92rem; margin: 0 0 1.5rem 0;
+}
+.section-label {
+    font-weight: 700; font-size: 0.78rem; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 10px 0;
+}
+.card-label {
+    font-weight: 700; font-size: 0.75rem; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 10px 0;
+}
+
+/* ── Cards ── */
+.content-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 1.5rem; box-shadow: var(--shadow-sm);
+    margin-bottom: 0;
+    animation: fadeIn 0.3s ease;
+}
+/* Style Streamlit's bordered container to look like our premium auth card */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-lg) !important;
+    padding: 1.5rem 2rem 2rem 2rem !important;
+    box-shadow: var(--shadow-md) !important;
+}
+
+/* Stat card */
+.stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 1.1rem; text-align: center;
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.2s, box-shadow 0.2s;
+    animation: fadeIn 0.3s ease;
+}
+.stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.stat-icon { font-size: 1.1rem; margin-bottom: 4px; }
+.stat-num  { font-size: 1.7rem; font-weight: 800; }
+.stat-label{ font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; }
+
+/* Feature card */
+.feature-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 1.6rem; height: 180px;
+    box-shadow: var(--shadow-sm);
+    transition: all 0.25s cubic-bezier(0.16,1,0.3,1);
+    animation: fadeIn 0.3s ease;
+}
+.feature-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-lg); border-color: var(--accent); }
+.fc-icon  { font-size: 1.8rem; margin-bottom: 0.5rem; }
+.fc-title { font-weight: 700; font-size: 1rem; color: var(--text-primary); margin-bottom: 0.3rem; }
+.fc-desc  { font-size: 0.82rem; color: var(--text-muted); line-height: 1.45; }
+
+/* ── Hero (logged out) ── */
+.hero-section {
+    text-align: center; max-width: 720px;
+    margin: 1rem auto 2.5rem auto; padding: 0 1rem;
+}
+.hero-badge {
+    display: inline-block;
+    background: var(--accent-light);
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 0.78rem; font-weight: 600;
+    letter-spacing: 0.04em;
+    margin-bottom: 1rem;
+}
+.hero-title {
+    font-size: 3rem; font-weight: 900;
+    background: var(--accent-gradient);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    line-height: 1.15; margin-bottom: 1rem; letter-spacing: -2px;
+}
+.hero-sub {
+    font-size: 1.1rem; color: var(--text-muted);
+    line-height: 1.6; margin: 0 auto; max-width: 540px;
+}
+
+/* ── Home welcome ── */
+.home-welcome { margin-bottom: 1.5rem; }
+.home-greeting {
+    font-size: 1.8rem; font-weight: 800;
+    color: var(--text-primary); margin: 0 0 4px 0; letter-spacing: -0.5px;
+}
+.home-subtext { color: var(--text-muted); font-size: 0.95rem; margin: 0 0 1.5rem 0; }
+.section-gap { margin-top: 2rem; }
+
+/* Recent activity item */
+.recent-item {
+    padding: 8px 12px;
+    background: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+    font-size: 0.88rem; color: var(--text-secondary);
+    display: flex; align-items: center; gap: 8px;
+}
+
+/* ── Activity / Timeline ── */
+.timeline-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    margin-top: 16px;
+}
+.timeline-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 0.85rem 1.1rem;
+    box-shadow: var(--shadow-sm);
+    transition: box-shadow 0.2s;
+}
+.timeline-card:hover { box-shadow: var(--shadow-md); }
+.timeline-header {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+}
+.timeline-badge {
+    font-size: 0.7rem; font-weight: 700;
+    padding: 2px 8px; border-radius: 6px;
+    text-transform: uppercase; letter-spacing: 0.03em;
+}
+.timeline-date {
+    font-size: 0.75rem; color: var(--text-muted);
+}
+.timeline-label {
+    font-size: 0.9rem; color: var(--text-primary); font-weight: 500;
+}
+
+/* ── Chat ── */
+.chat-empty { text-align: center; padding: 3rem 2rem; }
+.chat-empty-title {
+    font-weight: 800; color: var(--text-primary);
+    font-size: 1.5rem; margin: 0 0 0.5rem 0;
+}
+.chat-empty-sub { color: var(--text-muted); font-size: 0.95rem; margin: 0; }
+
+.chat-row { display: flex; margin-bottom: 8px; align-items: flex-start; gap: 8px; }
+.user-row  { justify-content: flex-end; }
+.bot-row   { justify-content: flex-start; }
+.bot-avatar {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--bg-secondary); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.85rem; flex-shrink: 0; margin-top: 4px;
+}
+.chat-msg {
+    padding: 0.8rem 1.1rem; border-radius: 16px;
+    font-size: 0.92rem; line-height: 1.6; max-width: 75%;
+    word-wrap: break-word; overflow-wrap: break-word;
+}
+.user-bubble {
+    background: var(--accent-gradient) !important; color: #fff !important;
+    border-bottom-right-radius: 4px !important;
+}
+.bot-bubble {
+    background: var(--bg-card) !important; color: var(--text-primary) !important;
+    border: 1px solid var(--border) !important; border-bottom-left-radius: 4px !important;
+}
+.bot-bubble p      { color: var(--text-primary) !important; margin: 0.3rem 0 !important; }
+.bot-bubble strong { color: var(--accent) !important; font-weight: 700 !important; }
+.bot-bubble code   { background: var(--bg-secondary) !important; color: #10B981 !important; padding: 1px 5px !important; border-radius: 4px !important; font-size: 0.88em !important; }
+.bot-bubble pre    { background: var(--bg-secondary) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; padding: 0.6rem 1rem !important; overflow-x: auto !important; }
+.bot-bubble pre code { background: transparent !important; padding: 0 !important; }
+.bot-bubble blockquote { border-left: 3px solid var(--accent) !important; padding: 0.4rem 0.8rem !important; border-radius: 0 6px 6px 0 !important; }
+
+/* Suggestion chips */
+.stButton > button[key^="suggest_"] {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-secondary) !important;
+    font-size: 0.85rem !important; font-weight: 500 !important;
+    height: auto !important; padding: 10px 14px !important;
+    text-align: left !important; justify-content: flex-start !important;
+    border-radius: var(--radius-md) !important; line-height: 1.4 !important;
+}
+.stButton > button[key^="suggest_"]:hover {
+    border-color: var(--accent) !important;
+    background: var(--accent-light) !important;
+    color: var(--accent) !important;
+}
+
+/* ── Table ── */
+.th { padding: 10px 12px; text-align: left; color: var(--text-muted); font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.td { padding: 10px 12px; color: var(--text-primary); font-size: 0.88rem; }
+.badge-weak { background: #F59E0B; color: #000; font-size: 0.65rem; padding: 1px 6px; border-radius: 4px; font-weight: 700; margin-left: 6px; }
+
+/* ── Empty state ── */
+.empty-state {
+    text-align: center; padding: 4rem 2rem;
+    color: var(--text-muted);
+}
+
+/* ── Popover styling ── */
+div[data-testid="stPopover"] div[data-testid="stVerticalBlock"] .stButton > button {
+    background: transparent !important;
+    border: none !important;
+    text-align: left !important;
+    justify-content: flex-start !important;
+    color: var(--text-secondary) !important;
+    font-weight: 500 !important;
+    height: 36px !important;
+    border-radius: 6px !important;
+}
+div[data-testid="stPopover"] div[data-testid="stVerticalBlock"] .stButton > button:hover {
+    background: var(--accent-light) !important;
+    color: var(--accent) !important;
+}
+
+/* ── Animations ── */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+    .hero-title { font-size: 2rem; }
+    .feature-card { height: auto; }
+    .chat-msg { max-width: 90%; }
+    .stat-num { font-size: 1.3rem; }
+}
