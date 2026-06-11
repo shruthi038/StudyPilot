@@ -8,3 +8,4 @@ torch
 sentencepiece
 requests 
 python-dotenv
+pyperclip
