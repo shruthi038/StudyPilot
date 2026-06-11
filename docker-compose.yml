@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  studypilot:
+    build: .
+    container_name: studypilot
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - ./studypilot.db:/app/studypilot.db
+      - ./theme_preferences.json:/app/theme_preferences.json
+    restart: unless-stopped
