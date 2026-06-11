@@ -1,8 +1,5 @@
 import streamlit as st
-from database.database import get_conn, load_data
-from utils.helpers import hash_password
-from auth.signup import render_signup_flow
-from auth.forgot_password import render_forgot_password_flow
+from controllers.auth_controller import login_user
 
 def render_login_page():
     _, col, _ = st.columns([1, 1.6, 1])
@@ -40,23 +37,15 @@ def render_login_page():
                     p   = st.text_input("Password", type="password")
                     sub = st.form_submit_button("Sign In →", use_container_width=True)
                 if sub:
-                    try:
-                        with get_conn() as conn:
-                            row = conn.execute("SELECT password FROM users WHERE username=?", (u.strip(),)).fetchone()
-                        if row and row["password"] == hash_password(p.strip()):
-                            st.session_state["logged_in"] = True
-                            st.session_state["username"]  = u.strip()
-                            load_data()
-                            st.session_state["page"]         = "landing"
-                            st.session_state["current_view"] = "home"
-                            intended = st.session_state.pop("_intended_view", None)
-                            if intended:
-                                st.session_state["current_view"] = intended
-                            st.rerun()
-                        else:
-                            st.error("Invalid username or password.")
-                    except Exception:
-                        st.error("Database error. Please try again.")
+                    if login_user(u.strip(), p.strip()):
+                        st.session_state["page"]         = "landing"
+                        st.session_state["current_view"] = "home"
+                        intended = st.session_state.pop("_intended_view", None)
+                        if intended:
+                            st.session_state["current_view"] = intended
+                        st.rerun()
+                    else:
+                        st.error("Invalid username or password.")
                 cl, cr = st.columns(2)
                 with cl:
                     if st.button("← Back", key="back_login"):

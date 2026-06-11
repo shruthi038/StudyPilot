@@ -1,7 +1,7 @@
 import datetime
 import streamlit as st
 from services.planner import generate_schedule
-from database.database import save_data
+from controllers.planner_controller import save_current_plan
 
 def render_planner_view():
     st.markdown(
@@ -16,7 +16,7 @@ def render_planner_view():
             "subjects": "", "weak": "", "mood": "", "schedule": [], "title": "Untitled Plan",
         }
         st.session_state["active_planner_id"] = nid
-        save_data()
+        save_current_plan(nid, st.session_state["all_plans"][nid])
     elif not st.session_state["active_planner_id"]:
         st.session_state["active_planner_id"] = list(st.session_state["all_plans"].keys())[0]
 
@@ -38,9 +38,11 @@ def render_planner_view():
 
     if gen:
         try:
-            plan = generate_schedule(subj, weak, mood, start_time, end_time, plan)
-            st.session_state["all_plans"][st.session_state["active_planner_id"]] = plan
-            save_data()
+            msg_history = st.session_state.get("message_history", {})
+            plan, new_history = generate_schedule(subj, weak, mood, start_time, end_time, plan, msg_history)
+            st.session_state["message_history"] = new_history
+            pid = st.session_state["active_planner_id"]
+            save_current_plan(pid, plan)
             st.rerun()
         except ValueError as e:
             st.error(str(e))

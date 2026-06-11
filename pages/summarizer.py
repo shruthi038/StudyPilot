@@ -1,7 +1,7 @@
 import datetime
 import streamlit as st
 from services.summarizer import get_summary
-from database.database import save_data
+from controllers.summary_controller import save_current_summary
 
 def render_summary_view():
     st.markdown(
@@ -17,7 +17,7 @@ def render_summary_view():
             "format_style": "Plain Text", "title": "Untitled Summary",
         }
         st.session_state["active_summary_id"] = nid
-        save_data()
+        save_current_summary(nid, st.session_state["all_summaries"][nid])
     elif not st.session_state["active_summary_id"]:
         st.session_state["active_summary_id"] = list(st.session_state["all_summaries"].keys())[0]
 
@@ -63,7 +63,7 @@ def render_summary_view():
                 if node["title"].startswith("Untitled"):
                     node["title"] = raw_text[:18] + "..."
                 st.session_state["all_summaries"][st.session_state["active_summary_id"]] = node
-                save_data()
+                save_current_summary(st.session_state["active_summary_id"], node)
                 st.rerun()
 
     if node["summary"]:

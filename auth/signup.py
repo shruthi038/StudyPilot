@@ -1,7 +1,8 @@
 import random
 import datetime
 import streamlit as st
-from database.database import get_conn, load_data
+from controllers.auth_controller import register_user, load_user_data
+from models.user_model import get_all_users
 from utils.helpers import hash_password, validate_email, is_otp_expired, send_otp_email
 
 def render_signup_flow():
@@ -26,7 +27,7 @@ def render_signup_flow():
             if not validate_email(ei.strip()):
                 st.error("Enter a valid email.")
             else:
-                existing = [m["identity"] for m in st.session_state["user_db"].values()]
+                existing = [u["email"] for u in get_all_users()]
                 if ei.strip() in existing:
                     st.error("Account with this email already exists.")
                 else:
@@ -79,26 +80,23 @@ def render_signup_flow():
             rc   = st.text_input("Confirm Password",  type="password")
             done = st.form_submit_button("Create Account →", use_container_width=True)
         if done:
-            existing_emails = [m["identity"] for m in st.session_state["user_db"].values()]
+            existing_users = get_all_users()
+            existing_emails = [u["email"] for u in existing_users]
+            existing_usernames = [u["username"] for u in existing_users]
+            
             if len(ru.strip()) < 3:      st.error("Username too short.")
-            elif ru.strip() in st.session_state["user_db"]: st.error("Username taken.")
+            elif ru.strip() in existing_usernames: st.error("Username taken.")
             elif st.session_state["temp_identity"] in existing_emails: st.error("Email already registered.")
             elif rp != rc:               st.error("Passwords don't match.")
             elif len(rp) < 4:            st.error("Password too short.")
             else:
-                new_user = {"identity": st.session_state["temp_identity"], "password": hash_password(rp.strip())}
-                st.session_state["user_db"][ru.strip()] = new_user
-                try:
-                    with get_conn() as conn:
-                        conn.execute(
-                            "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
-                            (ru.strip(), new_user["identity"], new_user["password"]),
-                        )
-                except Exception:
-                    pass
-                st.session_state["logged_in"]    = True
-                st.session_state["username"]     = ru.strip()
-                load_data()
-                st.session_state["page"]         = "landing"
-                st.session_state["current_view"] = "home"
+                if register_user(ru.strip(), st.session_state["temp_identity"], rp.strip()):
+                    st.session_state["logged_in"]    = True
+                    st.session_state["username"]     = ru.strip()
+                    load_user_data(ru.strip())
+                    st.session_state["page"]         = "landing"
+                    st.session_state["current_view"] = "home"
+                    st.rerun()
+                else:
+                    st.error("Registration failed.")
                 st.rerun()

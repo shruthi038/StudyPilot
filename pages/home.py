@@ -1,5 +1,6 @@
 import streamlit as st
 from components.cards import render_stat_card, render_recent_item
+from controllers.analytics_controller import get_analytics_data
 from utils.helpers import get_time_greeting
 
 def render_home_view():
@@ -18,14 +19,11 @@ def render_home_view():
             unsafe_allow_html=True,
         )
 
-        # Stats row
-        total_chats     = len(st.session_state.get("all_chats",     {}))
-        total_summaries = len(st.session_state.get("all_summaries", {}))
-        total_plans     = len(st.session_state.get("all_plans",     {}))
-        total_mins      = sum(
-            p.get("total_minutes", 0)
-            for p in st.session_state.get("all_plans", {}).values()
-        )
+        data = get_analytics_data()
+        total_chats     = data["chats"]
+        total_summaries = data["summaries"]
+        total_plans     = data["plans"]
+        total_mins      = data["minutes"]
         c1, c2, c3, c4 = st.columns(4)
         stat_items = [
             (c1, "💬", total_chats,     "Chats",      "#6366F1"),

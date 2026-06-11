@@ -1,21 +1,17 @@
 import random
 import datetime
-import streamlit as st
 from services.chatbot import get_sia
 from utils.constants import MOTIVATIONAL_BANK, CHECKIN_MESSAGES
 
-def get_motivational_message(sentiment_score):
+def get_motivational_message(sentiment_score, msg_history):
     cat   = "positive" if sentiment_score >= 0.1 else ("negative" if sentiment_score <= -0.1 else "neutral")
     opts  = MOTIVATIONAL_BANK[cat]
-    # message_history is stored in st.session_state
-    msg_history = st.session_state.get("message_history", {})
     avail = [m for m in opts if msg_history.get(m, 0) < 2] or opts
     chosen = random.choice(avail)
     msg_history[chosen] = msg_history.get(chosen, 0) + 1
-    st.session_state["message_history"] = msg_history
-    return chosen, cat, CHECKIN_MESSAGES[cat]
+    return chosen, cat, CHECKIN_MESSAGES[cat], msg_history
 
-def generate_schedule(subj, weak, mood, start_time, end_time, plan):
+def generate_schedule(subj, weak, mood, start_time, end_time, plan, msg_history):
     slist = [s.strip() for s in subj.split(",") if s.strip()]
     if not slist:
         raise ValueError("Please enter at least one subject.")
@@ -24,7 +20,7 @@ def generate_schedule(subj, weak, mood, start_time, end_time, plan):
 
     sia        = get_sia()
     mood_score = sia.polarity_scores(mood)["compound"]
-    boost, mood_cat, checkin = get_motivational_message(mood_score)
+    boost, mood_cat, checkin, updated_history = get_motivational_message(mood_score, msg_history)
     plan.update({"subjects": subj, "weak": weak, "mood": mood})
     if plan.get("title", "Untitled Plan").startswith("Untitled") and slist:
         plan["title"] = f"Plan: {slist[0]}"
@@ -70,4 +66,4 @@ def generate_schedule(subj, weak, mood, start_time, end_time, plan):
         "schedule": schedule, "boost": boost, "checkin": checkin,
         "mood_cat": mood_cat, "mode": mode, "total_minutes": total_minutes,
     })
-    return plan
+    return plan, updated_history

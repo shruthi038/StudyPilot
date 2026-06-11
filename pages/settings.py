@@ -1,6 +1,5 @@
 import streamlit as st
-from database.database import get_conn
-from utils.helpers import hash_password
+from controllers.settings_controller import change_password, clear_user_history
 
 def render_settings_view():
     st.markdown(
@@ -25,13 +24,7 @@ def render_settings_view():
         elif len(new_pwd) < 4:
             st.error("Password must be at least 4 characters.")
         else:
-            with get_conn() as conn:
-                row = conn.execute("SELECT password FROM users WHERE username=?", (uid,)).fetchone()
-            if row and row["password"] == hash_password(old_pwd):
-                new_hash = hash_password(new_pwd)
-                with get_conn() as conn:
-                    conn.execute("UPDATE users SET password=? WHERE username=?", (new_hash, uid))
-                st.session_state["user_db"][uid]["password"] = new_hash
+            if change_password(uid, old_pwd, new_pwd):
                 st.success("Password updated!")
             else:
                 st.error("Incorrect current password.")
@@ -47,14 +40,7 @@ def render_settings_view():
         unsafe_allow_html=True,
     )
     if st.button("🗑️ Clear All History", key="clear_all", use_container_width=True):
-        with get_conn() as conn:
-            conn.execute("DELETE FROM chats    WHERE username=?", (uid,))
-            conn.execute("DELETE FROM summaries WHERE username=?", (uid,))
-            conn.execute("DELETE FROM plans    WHERE username=?", (uid,))
-        for k in ["all_chats", "all_summaries", "all_plans"]:
-            st.session_state[k] = {}
-        for k in ["active_chat_id", "active_summary_id", "active_planner_id"]:
-            st.session_state[k] = ""
+        clear_user_history(uid)
         st.toast("History cleared! 🧹")
         st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)

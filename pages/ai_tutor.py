@@ -1,17 +1,10 @@
 import datetime
 import streamlit as st
 import pyperclip
-from services.chatbot import get_chat_response
-from database.database import save_chat_immediately
+from controllers.chat_controller import init_chat_state, send_message
 
 def render_chat_view():
-    if not st.session_state["all_chats"]:
-        default_id = f"chat_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        st.session_state["all_chats"][default_id] = []
-        st.session_state["active_chat_id"] = default_id
-        save_chat_immediately(default_id, [], st.session_state["username"])
-    elif not st.session_state["active_chat_id"]:
-        st.session_state["active_chat_id"] = list(st.session_state["all_chats"].keys())[0]
+    init_chat_state()
 
     active_chat_id = st.session_state["active_chat_id"]
     active_chat    = st.session_state["all_chats"].get(active_chat_id, [])
@@ -20,13 +13,7 @@ def render_chat_view():
     prefill = st.session_state.pop("_chat_prefill", None)
     if prefill:
         with st.spinner("Thinking…"):
-            ans, sentiment = get_chat_response(prefill, active_chat)
-        if sentiment["compound"] >= 0.05:  st.toast("Positive vibes! 😊")
-        elif sentiment["compound"] <= -0.05: st.toast("You seem stressed. Take it easy! 💙")
-        active_chat.append({"role": "user",      "text": prefill})
-        active_chat.append({"role": "assistant", "text": ans})
-        st.session_state["all_chats"][active_chat_id] = active_chat
-        save_chat_immediately(active_chat_id, active_chat, st.session_state["username"])
+            send_message(active_chat_id, prefill)
         st.rerun()
 
     # ── Empty state with suggestion chips ──
@@ -89,11 +76,5 @@ def render_chat_view():
 
     if send and chat_input.strip():
         with st.spinner("Thinking…"):
-            ans, sentiment = get_chat_response(chat_input, active_chat)
-        if sentiment["compound"] >= 0.05:  st.toast("Positive vibes! 😊")
-        elif sentiment["compound"] <= -0.05: st.toast("You seem stressed. Take it easy! 💙")
-        active_chat.append({"role": "user",      "text": chat_input})
-        active_chat.append({"role": "assistant", "text": ans})
-        st.session_state["all_chats"][active_chat_id] = active_chat
-        save_chat_immediately(active_chat_id, active_chat, st.session_state["username"])
+            send_message(active_chat_id, chat_input.strip())
         st.rerun()

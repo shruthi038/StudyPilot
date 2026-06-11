@@ -1,7 +1,7 @@
 import random
 import datetime
 import streamlit as st
-from database.database import get_conn
+from models.user_model import get_all_users, get_user_by_username, upsert_user
 from utils.helpers import hash_password, is_otp_expired, send_otp_email
 
 def render_forgot_password_flow():
@@ -11,7 +11,8 @@ def render_forgot_password_flow():
             re_email = st.text_input("Registered Email")
             lookup   = st.form_submit_button("Send Reset OTP →", use_container_width=True)
         if lookup:
-            found = next((u for u, m in st.session_state["user_db"].items() if m["identity"] == re_email.strip()), None)
+            users = get_all_users()
+            found = next((u["username"] for u in users if u["email"] == re_email.strip()), None)
             if found:
                 otp = str(random.randint(100000, 999999))
                 ok, err = send_otp_email(re_email.strip(), otp)
@@ -56,12 +57,9 @@ def render_forgot_password_flow():
             else:
                 target   = st.session_state["recovery_target_user"]
                 new_hash = hash_password(np1.strip())
-                st.session_state["user_db"][target]["password"] = new_hash
-                try:
-                    with get_conn() as conn:
-                        conn.execute("UPDATE users SET password=? WHERE username=?", (new_hash, target))
-                except Exception:
-                    pass
+                user_info = get_user_by_username(target)
+                if user_info:
+                    upsert_user(target, user_info["email"], new_hash)
                 st.success("Password updated! Sign in now.")
                 st.session_state["auth_view"] = "login"
                 st.rerun()

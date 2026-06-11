@@ -1,6 +1,8 @@
 import datetime
 import streamlit as st
-from database.database import save_data, delete_item_from_db, save_chat_immediately
+from controllers.chat_controller import remove_chat, save_current_chat
+from controllers.summary_controller import remove_summary, save_current_summary
+from controllers.planner_controller import remove_plan, save_current_plan
 from auth.session import _do_logout, _require_login
 from styles.theme import save_user_theme
 
@@ -165,19 +167,20 @@ def render_history_panel(feature_key, friendly_name):
         if feature_key == "chat":
             st.session_state["all_chats"][nid] = []
             st.session_state["active_chat_id"] = nid
-            save_chat_immediately(nid, [], st.session_state["username"])
+            save_current_chat(nid, [])
         elif feature_key == "summary":
             st.session_state["all_summaries"][nid] = {
                 "text": "", "summary": "", "word_count": 80,
                 "format_style": "Plain Text", "title": "Untitled Summary",
             }
             st.session_state["active_summary_id"] = nid
+            save_current_summary(nid, st.session_state["all_summaries"][nid])
         else:
             st.session_state["all_plans"][nid] = {
                 "subjects": "", "weak": "", "mood": "", "schedule": [], "title": "Untitled Plan",
             }
             st.session_state["active_planner_id"] = nid
-        save_data()
+            save_current_plan(nid, st.session_state["all_plans"][nid])
         st.rerun()
 
     if not history_dict:
@@ -222,8 +225,10 @@ def render_history_panel(feature_key, friendly_name):
                     st.rerun()
             with dc2:
                 if st.button("Delete", key=f"del_{item_id}_{feature_key}", use_container_width=True):
-                    del history_dict[item_id]
-                    delete_item_from_db(feature_key, item_id)
+                    if feature_key == "chat": remove_chat(item_id)
+                    elif feature_key == "summary": remove_summary(item_id)
+                    else: remove_plan(item_id)
+                    
                     st.session_state["active_menu_item_id"] = ""
                     if active_id == item_id:
                         remaining = list(history_dict.keys())
@@ -239,8 +244,11 @@ def render_history_panel(feature_key, friendly_name):
             new_title = st.text_input("New name", placeholder="Enter title…", label_visibility="collapsed")
             if st.form_submit_button("Save", use_container_width=True):
                 if new_title.strip():
-                    if feature_key != "chat":
+                    if feature_key == "summary":
                         history_dict[eid]["title"] = new_title.strip()
-                    save_data()
+                        save_current_summary(eid, history_dict[eid])
+                    elif feature_key == "planner":
+                        history_dict[eid]["title"] = new_title.strip()
+                        save_current_plan(eid, history_dict[eid])
                     st.session_state["editing_item_id"] = ""
                     st.rerun()

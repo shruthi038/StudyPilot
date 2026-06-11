@@ -1,5 +1,5 @@
 import streamlit as st
-from database.database import init_db, get_conn
+from models.database import init_db
 from styles.theme import get_user_theme
 from styles.css import inject_css
 from components.navbar import render_navbar
@@ -85,15 +85,6 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 if "users_loaded" not in st.session_state:
-    try:
-        with get_conn() as conn:
-            rows = conn.execute("SELECT username, email, password FROM users").fetchall()
-            st.session_state["user_db"] = {
-                r["username"]: {"identity": r["email"], "password": r["password"]}
-                for r in rows
-            }
-    except Exception:
-        pass
     st.session_state["users_loaded"] = True
 
 if st.session_state["logged_in"] and st.session_state["username"]:

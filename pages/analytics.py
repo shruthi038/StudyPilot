@@ -1,5 +1,6 @@
 import streamlit as st
 from components.cards import render_stat_card
+from controllers.analytics_controller import get_analytics_data
 
 def render_analytics_view():
     st.markdown(
@@ -7,15 +8,13 @@ def render_analytics_view():
         "<p class='view-subtitle'>Track your learning patterns, productivity, and wellbeing</p>",
         unsafe_allow_html=True,
     )
-    total_chats     = len(st.session_state.get("all_chats",     {}))
-    total_summaries = len(st.session_state.get("all_summaries", {}))
-    total_plans     = len(st.session_state.get("all_plans",     {}))
-    total_minutes   = sum(p.get("total_minutes", 0) for p in st.session_state.get("all_plans", {}).values())
-    modes = {"classic": 0, "mellow": 0, "gentle": 0}
-    moods = {"positive": 0, "neutral": 0, "negative": 0}
-    for plan in st.session_state.get("all_plans", {}).values():
-        modes[plan.get("mode", "classic")] = modes.get(plan.get("mode", "classic"), 0) + 1
-        moods[plan.get("mood_cat", "neutral")] = moods.get(plan.get("mood_cat", "neutral"), 0) + 1
+    data = get_analytics_data()
+    total_chats     = data["chats"]
+    total_summaries = data["summaries"]
+    total_plans     = data["plans"]
+    total_minutes   = data["minutes"]
+    modes           = data["modes"]
+    moods           = data["moods"]
 
     c1, c2, c3, c4 = st.columns(4)
     stat_items = [

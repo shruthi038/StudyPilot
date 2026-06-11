@@ -3,13 +3,15 @@ import difflib
 import requests
 import nltk
 import pandas as pd
-import streamlit as st
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from utils.constants import GROQ_API_KEY, GROQ_MODEL, GROQ_URL
 
+_GROQ_EXHAUSTED = False
+
 def _groq_available() -> bool:
-    return bool(GROQ_API_KEY) and not st.session_state.get("groq_exhausted", False)
+    global _GROQ_EXHAUSTED
+    return bool(GROQ_API_KEY) and not _GROQ_EXHAUSTED
 
 def call_groq(messages: list, max_tokens: int = 1024) -> tuple[str, bool]:
     if not GROQ_API_KEY:
@@ -26,12 +28,15 @@ def call_groq(messages: list, max_tokens: int = 1024) -> tuple[str, bool]:
     except requests.exceptions.HTTPError:
         code = resp.status_code
         if code in (401, 429):
-            st.session_state["groq_exhausted"] = True
+            global _GROQ_EXHAUSTED
+            _GROQ_EXHAUSTED = True
         return "", False
     except Exception:
         return "", False
 
-@st.cache_resource(show_spinner="Loading offline AI models (first run only)…")
+import functools
+
+@functools.lru_cache(maxsize=1)
 def load_offline_models():
     nltk.download("vader_lexicon", quiet=True)
     nltk.download("punkt",         quiet=True)
